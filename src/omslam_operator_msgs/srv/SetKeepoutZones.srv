@@ -1,0 +1,9 @@
+# Changes require a fresh owner, measured stop and an inactive base.
+string token
+uint64 epoch
+uint64 expected_revision
+geometry_msgs/Polygon[] polygons
+---
+bool success
+string message
+uint64 revision

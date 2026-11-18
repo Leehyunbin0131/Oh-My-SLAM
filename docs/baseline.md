@@ -8,10 +8,10 @@
 
 | 구성 요소 | 기준 | 적용 조건 |
 | --- | --- | --- |
-| 메가/Orin 공통 제어 | `Oh-My-Control@c703f130c14388b4b7845a25b900d726f8c9a71d` | 저수준 구동 기준. 새 ROS 연결은 별도 검증 |
+| 메가/Orin 공통 제어 | `Oh-My-Control@5d5d65b6ba208383d3dede73ffb8a108cf786a76` | `c703f13` 기반 원본 시각 API 확장 로컬 커밋. 동일 모듈을 vendor에 포함; 실물 연결은 별도 검증 |
 | 실물 컴퓨터 | Jetson Orin, aarch64, Ubuntu 24.04.5 LTS, ROS 2 Jazzy | ARM64에서 별도 빌드 |
 | 기존 실물 구성 | `robot_mapping_ws`, 수동 mapping 및 저장 지도 navigation | 새 bridge·odom/TF 계약으로 이관 |
-| 기존 시뮬레이션 | Jazzy + Harmonic, NavFn + MPPI, 보로노이 선호 cost·깊이 장애물 기억 | 새 공통 기준은 NavFn + RPP |
+| 기존 시뮬레이션 | Jazzy + Harmonic, NavFn + MPPI, 보로노이 선호 cost·깊이 장애물 기억 | 새 공통 기준은 State Lattice + DWB와 표준 비용지도 |
 | 모델 저장소 | `Oh-My-MobileRobot@f85154b53ea57b80e8a8ff6e4d6d8d38a8a0c35b` | description·CAD/mesh의 출처와 라이선스 유지 |
 | 소스 구성 | 기존 sim은 독립 Git 이력 없음 | 이관 파일의 SHA256·NOTICE로 출처 고정 |
 
@@ -24,10 +24,12 @@
 | 패키지 | 기준 버전 |
 | --- | --- |
 | `ros_gz_bridge` | 1.0.24 |
-| `nav2_bringup`, `nav2_controller`, `nav2_mppi_controller` | 1.3.13 |
+| `nav2_bringup`, `nav2_controller`, `nav2_smac_planner`, `dwb_core`, `dwb_plugins`, `dwb_critics` | 1.3.13 |
 | `slam_toolbox` | 2.8.5 |
 | `robot_localization` | 3.8.3 |
 | `diff_drive_controller` | 4.42.1 |
+
+`nav2_smac_planner`는 Navigation2 1.3.13 커밋 `f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501`의 소스를 이 workspace에서 빌드합니다. 연속 격자 좌표의 중심 셀 조회와 footprint 변환 두 곳을 보완하여 실제 자세와 충돌 검사 자세를 일치시킵니다. 또한 경계 곡선과 평활화 반복에서 `worldToMap` 실패를 확인하고, 맵 크기와 같은 상한 좌표·비유한 좌표·범위 밖 선형 인덱스를 거부합니다. Lattice가 반환하는 최종 경로는 연속 yaw의 채워진 footprint와 자세 사이 보간 구간을 검사하며, 실패하면 검사에 통과한 원래 경로만 반환합니다. 둘 다 충돌하면 계획 실패를 반환합니다. `xy_goal_tolerance`를 활성화한 diff/omni 모델은 목표의 XY 허용 범위 안에서 현재 자세의 회전과 원래 목표로의 짧은 연결을 검사해 반환합니다. 범위 밖 탐색·움직임 집합·차체·lethal/unknown 판정 기준은 유지합니다. 원본/변경 해시와 패치는 [출처 기록](../src/nav2_smac_planner/provenance.json)에 있으며, 실행 시 `ros2 pkg prefix nav2_smac_planner`는 이 workspace의 `install/nav2_smac_planner`여야 합니다. 나머지 Nav2 패키지는 설치된 1.3.13을 사용합니다.
 
 문서의 최신 Jazzy branch와 설치된 바이너리가 완전히 같다고 가정하지 않습니다. 특히 stamped velocity 옵션·smoother timestamp 보존 설정은 P1에서 설치본의 선언 파라미터와 실제 메시지로 확인합니다.
 
@@ -41,7 +43,7 @@
 | 호스트 송신 / 상태 수신 | 최대 50 Hz / 약 20 Hz |
 | command lease | 100–300 ms, 원본 생성 시각의 유효기간 보존 |
 | 피드백 중단 | 호스트 400 ms 기준 |
-| 바퀴 상한 | 실물 운용 95 RPM / MCU 보호 100 RPM |
+| 바퀴 상한 | 실물 운용 95 RPM / MCU 보호 100 RPM / 시뮬레이션 100 RPM |
 | 정상 0 속도 | 제동/HOLD |
 | `STOP` | 제어·출력 해제 |
 
@@ -66,12 +68,13 @@
 
 | 기존 자산 | 새 저장소의 처리 |
 | --- | --- |
-| Mega 펌웨어·공통 통신/보정 | 버전 고정 재사용. ROS 명령 시각을 전달하는 작은 호스트 API 확장만 P1에 계획 |
+| Mega 펌웨어·공통 통신/보정 | 버전 고정 재사용. ROS 명령 시각을 전달하는 원본 시각을 받는 호환 호스트 API 확장을 vendor에 반영 |
 | 원본 description·mesh | provenance·라이선스 유지, 필요한 경로만 설치 |
-| Gazebo 모델·센서·월드 | 공통 ROS 계약과 95 RPM 운용 한도로 이관 |
+| Gazebo 모델·센서·월드 | 공통 ROS 계약과 시뮬레이션 100 RPM 한도 적용 |
 | `omm_perception`, `omm_perception_msgs` | 기존 바닥 분리·낮은 장애물 기억 기능 이관 |
-| `omm_costmap_layers` | camera memory와 보로노이 선호 비용 이관 |
-| 기존 MPPI critic·State Lattice | 공통 NavFn+RPP 기준 구현 이후 실제 요구가 생길 때만 검토 |
+| `omm_costmap_layers` | camera memory 레이어 이관. 보로노이 전용 레이어는 초기 구성에서 제외 |
+| State Lattice | 새 기본 전역 계획기. 차동구동 움직임 집합·footprint·costmap 해상도를 새 공통 계약에 맞춰 고정 |
+| 기존 MPPI critic | 초기 DWB 구성의 이관 대상에 포함하지 않음 |
 | 기존 실물 bridge | 통신·정지·원본 수명 계약을 새 base에 맞춰 구현. 소스를 확인 없이 복제하지 않음 |
 | ICP odometry | 새 기본 구성은 측정 wheel odom+IMU. 기존 ICP TF와 동시 발행하지 않음 |
 | 기존 실물 지도·보정 | 원본 보존, 장비별 설정으로 관리. 새 구성의 통과 근거로 자동 승계하지 않음 |
@@ -80,7 +83,7 @@
 
 | 구분 | 레거시 특성 | 이관 요구사항 |
 | --- | --- | --- |
-| 실물 controller | 운용 문서는 NavFn + RPP, 일부 보관 검증은 NavFn + MPPI | 실제 controller 설정을 고정하고 서로 다른 구성의 결과를 혼용하지 않음 |
+| 실물 controller | 운용 문서는 NavFn + RPP, 일부 보관 검증은 NavFn + MPPI | 새 기준은 State Lattice + DWB. 실제 controller 설정을 고정하고 서로 다른 구성의 결과를 혼용하지 않음 |
 | 실물 odom | 보관 구성은 `icp_odometry`, 약 12 Hz | 새 측정 wheel odom/EKF로 전환, 기존 TF authority 비활성화 |
 | sim odom | Gazebo가 odom과 odom TF를 함께 제공 | EKF 적용 시 Gazebo TF를 제거 |
 | sim 명령 | `Twist`를 guard에서 주기적으로 재발행 | stamped 원본 수명·공통 명령 계약으로 변경 |

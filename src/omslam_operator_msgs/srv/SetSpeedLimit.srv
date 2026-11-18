@@ -1,0 +1,17 @@
+string token
+uint64 epoch
+string request_id
+# Manual limits in m/s and rad/s, both strictly positive.
+float64 linear_limit
+float64 angular_limit
+# AUTO limit in percent, 1..100. Zero never means stop.
+float64 speed_percent
+# Per-wheel upper limit in RPM. Zero derives it from speed_percent for old clients.
+float64 wheel_rpm_limit
+---
+bool success
+string message
+float64 linear_limit
+float64 angular_limit
+float64 speed_percent
+float64 wheel_rpm_limit

@@ -1,0 +1,133 @@
+# P4 simulation starting values, not physical calibration or measured performance.
+planner_server:
+  ros__parameters:
+    GridBased:
+      tolerance: 0.10
+      max_planning_time: 2.0
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    costmap_update_timeout: 0.30
+    failure_tolerance: 0.30
+    progress_checker:
+      required_movement_radius: 0.10
+      required_movement_angle: 0.10
+      movement_time_allowance: 10.0
+    goal_checker:
+      # Launch also supplies these XY/translation thresholds to Lattice and DWB.
+      xy_goal_tolerance: 0.10
+      yaw_goal_tolerance: 0.15
+      trans_stopped_velocity: 0.01
+      rot_stopped_velocity: 0.02
+    FollowPath:
+      min_vel_x: 0.0
+      # 100 RPM at the simulation wheel radius of 0.068 m.
+      max_vel_x: 0.7120943348136866
+      min_vel_y: 0.0
+      max_vel_y: 0.0
+      max_vel_theta: 0.60
+      min_speed_xy: 0.0
+      max_speed_xy: 0.7120943348136866
+      min_speed_theta: 0.0
+      acc_lim_x: 0.25
+      acc_lim_y: 0.0
+      acc_lim_theta: 0.60
+      decel_lim_x: -0.50
+      decel_lim_y: 0.0
+      decel_lim_theta: -1.00
+      vx_samples: 20
+      vy_samples: 1
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.025
+      angular_granularity: 0.025
+      transform_tolerance: 0.20
+      # Inflation is a 0..253 byte cost; MapGrid distances are resolution-scaled.
+      # Lethal/unknown footprint cells still reject the trajectory at any positive scale.
+      ObstacleFootprint.scale: 0.02
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+      Oscillation.scale: 1.0
+      GoalAlign.scale: 24.0
+      PathAlign.scale: 32.0
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      transform_tolerance: 0.20
+      camera_memory:
+        sensor_timeout: 0.30
+        # Voxel/grid coverage adds 0.05 m beyond this observation margin.
+        padding: 0.01
+      inflation_layer:
+        # Cover the padded 0.4965 m circumscribed radius plus one 5 cm cell.
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      transform_tolerance: 0.20
+      camera_memory:
+        sensor_timeout: 0.30
+        padding: 0.01
+      inflation_layer:
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+behavior_server:
+  ros__parameters:
+    transform_tolerance: 0.20
+
+velocity_smoother:
+  ros__parameters:
+    smoothing_frequency: 50.0
+    max_velocity: [0.7120943348136866, 0.0, 0.60]
+    min_velocity: [0.0, 0.0, -0.60]
+    max_accel: [0.25, 0.0, 0.60]
+    max_decel: [-0.50, 0.0, -1.00]
+    velocity_timeout: 0.30
+
+collision_monitor:
+  ros__parameters:
+    transform_tolerance: 0.20
+    source_timeout: 0.30
+    stop_pub_timeout: 1.0
+    Approach:
+      time_before_collision: 1.5
+      simulation_time_step: 0.05
+
+navigation_guard:
+  ros__parameters:
+    use_sim_time: true
+    operator_enabled: false
+    manual_reverse_enabled: false
+    rear_observation_verified: false
+    base_frame: base_footprint
+    odom_frame: odom
+    map_frame: map
+    scan_frame: laser_frame
+    scan_timeout: 0.30
+    depth_timeout: 0.30
+    health_timeout: 0.30
+    odom_timeout: 0.20
+    wheel_timeout: 0.40
+    map_tf_timeout: 0.50
+    clock_stall_timeout: 0.30
+    recovery_healthy_time: 1.0
+    service_timeout: 2.0
+    readiness_timeout: 30.0
+    map_jump_translation: 0.10
+    map_jump_rotation: 0.10
+    max_linear_velocity: 0.7120943348136866
+    max_angular_velocity: 0.60
+    future_tf_tolerance: 1.0
+    lifecycle_nodes: [collision_monitor, velocity_smoother, planner_server, controller_server, behavior_server, bt_navigator]

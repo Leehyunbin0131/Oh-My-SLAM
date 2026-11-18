@@ -11,7 +11,7 @@
 | V1 | ROS base·mock | 기구학·부호·명령 수명·큐 지연·fault·원시 엔코더 적분·설치본 | 정해진 입력의 계산값 일치, 원본 age를 재송신으로 늘리지 않음, stale 명령 재활성화 0회 |
 | V2 | Sim base·센서 | 짧은 전진/회전, TF·시간·타입·pause/resume | 전진 +X/좌회전 +yaw, TF 각 edge 단일 발행, `/clock` 혼용 없음, resume 후 새 명령 요구 |
 | V3 | Sim mapping/localization | 폐루프·map/graph 저장·AMCL 재시작 | 중복 벽/지속적 TF 오류 없음, 저장 파일 재로딩 성공, truth 대비 위치 ≤0.15 m·yaw ≤0.20 rad |
-| V4 | Sim Nav2 | 도착/취소, 코너·좁은 통로, 낮은 장애물, 막힌 경로 | 위치 ≤0.15 m·yaw ≤0.20 rad, 충돌 0회, 통과 불가 시 정지 후 제한된 실패 반환 |
+| V4 | Sim State Lattice+DWB | 한 실행에서 목표 5곳 연속 도착; 같은 기록의 센서·TF·인지·명령·충돌 관측 | 5/5 action 성공과 측정 정지, 위치 ≤0.15 m·yaw ≤0.20 rad, 측면 명령 0·충돌 0회·구동 한도 준수 |
 | V5 | Real base·odom/IMU | 새 ROS 경로 구동, 1 m 직진·양방향 회전·짧은 폐루프, 저속/정지 | 직진 거리 오차 ≤5%, 360° 회전 오차 ≤5°, 부호·축 정상, 원본 명령 timeout과 fault 처리 확인 |
 | V6 | Real SLAM/AMCL | 실제 폐루프·저장·두 위치 재초기화 | 기준 표식 대비 위치 ≤0.15 m·yaw ≤5°, 벽 이중화/지속적 scan drop 없음 |
 | V7 | Real 저장 지도 Nav2 | 3개 목표·취소/재출발·장애물·센서중단 | 위치 ≤0.15 m·yaw ≤0.20 rad, 접촉 0회, 실제 여유가 설정 footprint+padding 만족 |

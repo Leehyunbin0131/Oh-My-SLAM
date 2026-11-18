@@ -1,0 +1,13 @@
+# acquire, release, set_mode, validate (read-only owner validation).
+string command
+string owner_id
+string token
+uint64 epoch
+string request_id
+string mode
+---
+bool success
+string message
+string token
+uint64 epoch
+string mode

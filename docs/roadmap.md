@@ -40,6 +40,8 @@ flowchart LR
 
 **선행:** P0, `Oh-My-Control` 고정 기준.
 
+**제공 상태:** base/vendor 패키지와 명령·엔코더 측정 경로를 구현하고 모의 장치에서 검증했습니다. 실행·입력 계약은 [구동·EKF 안내](base_ekf.md)를 따릅니다. Velocity Smoother·Collision Monitor를 포함한 Nav2 속도 체인 통합은 P4 범위입니다.
+
 **구현 순서**
 
 1. `omslam_control_vendor`가 고정된 공통 모듈만 설치하도록 구성합니다. 임의의 홈 디렉터리·기존 overlay·전역 `PYTHONPATH`에 의존하지 않게 합니다.
@@ -60,14 +62,18 @@ flowchart LR
 
 **선행:** P1.
 
+**제공 상태:** CAD 로봇·라이다·IMU·RGB-D·wheel/EKF를 공항에 연결하고 전진·좌회전·정지, 명령 만료·pause/resume, TF·센서 시각을 실제 Gazebo 실행으로 검증했습니다. [실행 안내](sim_robot.md)를 따릅니다.
+
+공항 월드·환경 자산은 구동 브리지와 독립적으로 먼저 제공합니다. [공항 환경 패키지](airport_world.md)는 2터미널 공간·가구·보행자·시각 연결을 담당하며, 아래 로봇 센서·구동·TF의 P2 인수 기준과는 범위를 구분합니다.
+
 **구현**
 
 - 원본 CAD 설명 패키지를 고정 버전으로 가져오고 `omslam_description`에서 launch·장비별 extrinsic 설정을 제공합니다. 모델 원점·관절 이름·원본 라이선스를 유지합니다.
-- `omslam_sim`에 기존 Gazebo Harmonic 모델 생성기, 방·통로·좁은 코너·낮은 장애물 월드를 필요한 순서로 이관합니다.
+- `omslam_sim`의 대규모 공항 환경에 로봇 모델을 연결합니다. 방·통로·좁은 코너·낮은 장애물의 작은 월드는 기능 원인 분리에 필요한 경우에만 이관합니다.
 - P1과 같은 명령 수명·속도 상한을 적용하고 최하단에서만 Gazebo용 메시지로 변환합니다.
 - Gazebo의 wheel odom을 `/wheel/odometry`로 연결합니다. EKF를 켜면 Gazebo odom TF는 끕니다.
 - 가상 라이다·IMU·RGB-D의 frame·stamp·QoS, `use_sim_time`을 통일합니다. 별도 truth 토픽은 검증 도구만 구독합니다.
-- 시뮬레이션도 실물 운용 상한 95 RPM을 사용합니다. 100 RPM 보호 상한을 기본 주행 상한으로 가져오지 않습니다.
+- 시뮬레이션은 바퀴별 100 RPM을 사용합니다. 실물 운용 상한은 95 RPM으로 유지하며 MCU 보호 상한 100 RPM과 구분합니다.
 
 **산출물:** `sim.launch.py`, 기본 robot profile, 센서 bridge 설정, RViz 설정.
 
@@ -78,6 +84,8 @@ flowchart LR
 ## P3. 시뮬레이션 SLAM과 저장 지도 위치추정
 
 **선행:** P2.
+
+**제공 상태:** 공항 일부 구간에서 비동기 SLAM으로 지도·pose graph를 생성하고, 저장 파일 재로딩과 AMCL 재위치추정을 검증했습니다. EKF는 P2의 wheel·IMU 경로를 유지합니다. [지도 작성·위치추정 실행 안내](sim_mapping.md)를 따릅니다.
 
 **구현**
 
@@ -95,19 +103,23 @@ flowchart LR
 
 **선행:** P3.
 
+**상세 작업 계획:** [P4 구현·검증 계획](p4_implementation_plan.md)에서 파일별 산출물, 초기 설정, 공식 문서 근거, 필수 사전 검사와 센서·인지·Nav2·구동을 함께 확인하는 통합 주행, 문제 수정 후 영향 범위 재검증을 정의합니다. 필요한 근거가 확보되면 종료하며 주행 횟수는 제한하지 않습니다. [실행·복구 안내](sim_navigation.md)를 제공합니다.
+
+**제공 상태:** 동일 실행에서 목표 5곳의 연속 도착·측정 정지와 인수 오차를 통과했습니다. 최대 위치 오차 0.1111 m, 최대 yaw 오차 0.0100 rad, 충돌 0회이며 구동 해제와 실행 정리를 완료했습니다.
+
 **구현 순서**
 
-1. 공통 NavFn + RPP, footprint, 목표/진행 판정, smoothing, Collision Monitor를 연결합니다. sim·실물의 초기 controller를 같게 합니다.
-2. 목표 도착·취소·재출발·막힌 경로의 대기/실패 반환을 확인합니다. 무한 recovery를 기본으로 두지 않습니다.
-3. 기존 `omm_perception`·메시지·camera memory costmap을 이관합니다. 낮은 장애물 감지, 시야 밖 보존, 재관측 빈 공간 삭제, 데이터 중단 차단을 확인합니다.
-4. 보로노이 선호 cost layer를 추가합니다. lethal/unknown 비용과 좁은 통로 충돌 판정을 침범하지 않게 합니다.
+1. `diff`, 0.05 m 격자, 16개 방향, 0.5 m 곡선 반경의 초기 움직임 집합을 출처·해시와 함께 `omslam_navigation`에 설치합니다. 전역 costmap 해상도 일치와 `lattice_filepath`의 설치 경로를 확인합니다.
+2. 공통 State Lattice + DWB, 표준 static·obstacle·inflation 레이어, footprint, 목표/진행 판정, smoothing, Collision Monitor를 연결합니다. 전역 계획기는 `nav2_smac_planner::SmacPlannerLattice`, 지역 제어기는 `dwb_core::DWBLocalPlanner`로 통일합니다. `vy=0`, 초기 후진 비활성, 사각형 차체의 `ObstacleFootprint` 충돌 검사를 적용하고 속도·가감속·샘플 수·critic 가중치를 장비 profile에서 관리합니다.
+3. 기본 구성에서 목표 도착·취소·재출발·코너·제자리 회전·막힌 경로의 대기/실패 반환을 확인합니다. 무한 recovery를 기본으로 두지 않습니다.
+4. 기존 `omm_perception`·메시지·camera memory costmap을 이관합니다. 낮은 장애물 감지, 시야 밖 보존, 재관측 빈 공간 삭제, 데이터 중단 차단을 확인합니다.
 5. 온라인 SLAM을 켠 상태의 Nav2도 별도 모드로 구성하고, 지도 갱신·loop closure와 장애물 기억의 좌표 변환을 확인합니다.
 
-**산출물:** `omslam_navigation`, 이관한 인지·costmap 패키지, `navigation.launch.py`, `slam_navigation.launch.py`, 최소 BT.
+**산출물:** `omslam_navigation`과 고정된 움직임 집합 JSON·출처, 이관한 인지·camera memory costmap 패키지, `navigation.launch.py`, `slam_navigation.launch.py`, 최소 BT.
 
-**필수 검증 V4:** 서로 다른 의미를 확인하는 최소 월드 집합으로 묶습니다. 기본 방(도착/취소), 코너·좁은 통로(footprint/중심선), 낮은 상자(인지/기억), 막힌 통로(안전한 실패)를 각 한 번 수행합니다. 관련 없는 월드를 추가하지 않습니다.
+**필수 검증 V4:** 한 실행에서 5개 목표에 연속 정상 도착합니다. 각 목표의 action 성공·측정 정지·truth 기준 위치 ≤0.15 m·yaw ≤0.20 rad를 판정하고, 같은 기록에서 센서·TF·인지·명령 한도와 충돌 0회를 확인합니다. 최신 빌드와 수정에 직접 관련된 검사를 먼저 통과해야 하며 이전 실행의 성공을 합산하지 않습니다.
 
-**완료 조건:** V4 통과, sim controller 명령이 MCU 운용 한도와 원본 timeout 계약을 지킴. MPPI·State Lattice 전체 비교 실험은 기본 필수 검사가 아닙니다.
+**완료 조건:** 위 5개 목표의 연속 성공과 정상 구동 해제·실행 정리. 달성 후 추가 목표·실패 주입·모드 전환 시험을 계속하지 않습니다.
 
 ## P5. 실물 ROS 구동·기하·IMU·오도메트리
 
@@ -152,15 +164,15 @@ flowchart LR
 
 ## P7. 실물 저장 지도 Nav2
 
-**선행:** V6, sim에서 해당 인지·보로노이 검증 완료.
+**선행:** V6, sim에서 State Lattice+DWB 및 해당 인지 검증 완료.
 
 **진행**
 
 - P5에서 확인한 속도·가속도·yaw 한도로 시작합니다. 95 RPM은 상한이며 처음부터 그 속도로 시험하지 않습니다.
 - 실물 footprint와 padding, 실제 stop distance를 반영한 충돌 감시 영역을 적용합니다. 뒤쪽 관측이 충분하지 않으면 자율 후진 recovery를 켜지 않습니다.
-- P4의 NavFn+RPP를 그대로 기반으로 하고 장비별 기하·센서 timeout·제동 한도만 조정합니다.
+- P4의 State Lattice+DWB, 검증된 움직임 집합과 footprint 충돌 검사를 기반으로 하고 장비별 기하·센서 timeout·P5에서 측정한 속도·가감속 및 제동 한도를 적용합니다.
 - 목표 3개(직선, 회전/코너, 복귀)를 연결해 도착과 방향 정합을 확인합니다. 한 목표에서 cancel→정지→새 목표를 확인합니다.
-- 라이다 높이보다 낮은 상자, 시야 밖 장애물 기억, 보로노이 선호가 필요한 통로를 확인합니다. 카메라가 유효하지 않을 때 guard가 제한/차단하는 모드를 일관되게 적용합니다.
+- 라이다 높이보다 낮은 상자, 시야 밖 장애물 기억, 차체 외곽을 고려한 통로·코너 주행을 확인합니다. 카메라가 유효하지 않을 때 guard가 제한/차단하는 모드를 일관되게 적용합니다.
 - 사람이 없는 조건에서 센서 데이터 중단 또는 프로세스 중단을 한 번 주입하고 정지·복구를 확인합니다. 실제 사람을 충돌 시험 대상으로 사용하지 않습니다.
 
 **필수 검증 V7:** 위 경로·취소·장애물 시나리오를 하나의 실물 주행 세션으로 묶습니다. 출발/도착 위치·yaw 오차, 정지 거리, 최소 장애물 여유, timeout·fault, CPU/메모리와 제어 주기를 함께 기록합니다.
@@ -191,7 +203,7 @@ flowchart LR
 | 2 | ROS base lifecycle·측정 메시지·장치 worker | 나머지 V1 |
 | 3 | description/sim·센서/TF·EKF | V2 |
 | 4 | mapping·저장 도구·AMCL 모드 | V3 |
-| 5 | Nav2 공통 설정·인지/보로노이 이관 | V4 |
+| 5 | State Lattice+DWB·움직임 집합·인지/장애물 기억 이관 | V4 |
 | 6 | Orin 배치·장비 profile·실측 보정 | V5 |
 | 7 | 실물 map·위치추정·운용 기록 | V6 |
 | 8 | 실물 목표 주행 설정과 기록 | V7 |

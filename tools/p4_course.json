@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "world": "p4_course",
+  "resolution": 0.05,
+  "bounds": [-1.0, 11.0, -1.0, 9.0],
+  "spawn": [0.0, 0.0, 0.0],
+  "footprint": [[0.09, 0.26], [0.09, -0.26], [-0.39, -0.26], [-0.39, 0.26]],
+  "padding": 0.02,
+  "static_boxes": [
+    {"name":"west_wall", "bounds":[-1.1,-1.0,-1.1,9.1], "height":1.2},
+    {"name":"east_wall", "bounds":[11.0,11.1,-1.1,9.1], "height":1.2},
+    {"name":"south_wall", "bounds":[-1.0,11.0,-1.1,-1.0], "height":1.2},
+    {"name":"north_wall", "bounds":[-1.0,11.0,9.0,9.1], "height":1.2},
+    {"name":"narrow_north", "bounds":[1.5,3.5,0.4,0.5], "height":1.2},
+    {"name":"narrow_south", "bounds":[1.5,3.5,-0.5,-0.4], "height":1.2},
+    {"name":"central_block", "bounds":[1.0,4.0,1.0,3.0], "height":1.2},
+    {"name":"impossible_north", "bounds":[7.0,10.1,1.25,1.35], "height":1.2},
+    {"name":"impossible_south", "bounds":[7.0,10.1,0.65,0.75], "height":1.2},
+    {"name":"impossible_end", "bounds":[10.0,10.1,0.75,1.25], "height":1.2},
+    {"name":"gate_north", "bounds":[6.0,10.1,4.45,4.55], "height":1.2},
+    {"name":"gate_south", "bounds":[6.0,10.1,3.45,3.55], "height":1.2},
+    {"name":"gate_end", "bounds":[10.0,10.1,3.55,4.45], "height":1.2}
+  ],
+  "objects": {
+    "low_a": {"center":[5.0,2.0], "size":[0.30,0.30,0.10], "initial":true},
+    "low_b": {"center":[0.8,4.0], "size":[0.30,0.30,0.10], "initial":true},
+    "gate": {"center":[7.0,4.0], "size":[0.10,0.90,1.20], "initial":false},
+    "crossing": {"center":[4.0,3.4], "size":[0.30,0.30,0.50], "initial":false,
+      "end":[4.0,4.8], "velocity":[0.0,0.15], "endpoint_hold_s":1.0}
+  },
+  "events": [
+    {"id":"I1","goal":[1,0,0]},
+    {"id":"I2","goal":[4,0,0],"cancel_region":[2,3,-0.2,0.2]},
+    {"id":"I3","goal":[5,0,1.5707963267948966]},
+    {"id":"I4","goal":[5,4,1.5707963267948966]},
+    {"id":"I5","goal":[9,1,0],"expected":"ABORTED"},
+    {"id":"I6","goal":[9,4,0],"expected":"ABORTED","gate":"gate"},
+    {"id":"I7","goal":[5,4,-1.5707963267948966],"remove":"low_a"},
+    {"id":"I8","goal":[3,4,3.141592653589793],"trigger_region":[4.7,4.9,3.8,4.2],"object":"crossing"},
+    {"id":"I9","goal":[2,4,3.141592653589793],"trigger_region":[2.5,2.7,3.8,4.2],"fault":"depth","duration_s":1.0},
+    {"id":"I10","goal":[2,4,3.141592653589793]},
+    {"id":"I11","goal":[1.5,4,3.141592653589793],"trigger_region":[1.8,1.9,3.8,4.2],"fault":"scan","duration_s":1.0},
+    {"id":"I12","goals":[[0,4,-1.5707963267948966],[0,0,0]]},
+    {"id":"I15","goal":[0.7,0,0]}
+  ]
+}

@@ -1,0 +1,612 @@
+{
+  "schema_version": 1,
+  "package": "nav2_smac_planner",
+  "package_version": "1.3.13",
+  "upstream": {
+    "repository": "https://github.com/ros-navigation/navigation2",
+    "tag": "1.3.13",
+    "commit": "f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501",
+    "commit_url": "https://github.com/ros-navigation/navigation2/tree/f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501",
+    "package_path": "nav2_smac_planner",
+    "archive_url": "https://codeload.github.com/ros-navigation/navigation2/tar.gz/f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501",
+    "archive_sha256": "dcc59eef3c0be52194707b827917212b8d6eeca8003e09b92f21343a48f9bdcb",
+    "license": "Apache-2.0",
+    "license_source_path": "LICENSE"
+  },
+  "vendoring": {
+    "destination": "src/nav2_smac_planner",
+    "scope": "Complete upstream nav2_smac_planner package plus the original repository LICENSE.",
+    "reason": "Keep the Nav2 1.3.13 plugin reproducible in ordinary workspace builds without fetching an external checkout.",
+    "plugin": "nav2_smac_planner::SmacPlannerLattice"
+  },
+  "patches": [
+    {
+      "path": "patches/0001-preserve-continuous-grid-coordinates.patch",
+      "sha256": "545e1e7a38afd6d3b184153a44028c64da6b2e3edceb1323a6acef018b4cd1e8",
+      "apply_from": "nav2_smac_planner",
+      "changed_upstream_files": [
+        "CMakeLists.txt",
+        "src/collision_checker.cpp"
+      ],
+      "reason": "The continuous collision overload rounded center indices upward by half a cell and implicitly truncated footprint coordinates through Costmap2D::mapToWorld(unsigned int, unsigned int, ...). This could reject a physically valid pose when its grid coordinate crossed an integer boundary. Use the containing center cell and the same continuous world conversion as the returned path.",
+      "unchanged": [
+        "Integer-index collision overload",
+        "A* search",
+        "Motion primitives",
+        "Start and goal handling",
+        "Returned path conversion",
+        "Footprint geometry and padding",
+        "Lethal and unknown collision thresholds"
+      ]
+    },
+    {
+      "path": "patches/0002-reject-smoother-boundary-outside-map.patch",
+      "sha256": "a7391511be5c6c188afa5becd22cb00b483d2bd8437c3558605c2ff3e5f255d6",
+      "apply_from": "nav2_smac_planner",
+      "changed_upstream_files": [
+        "src/smoother.cpp",
+        "test/CMakeLists.txt"
+      ],
+      "added_files": [
+        "test/test_smoother_bounds.cpp"
+      ],
+      "reason": "Actual native GUI automatic SLAM run crashed in findBoundaryExpansion/getCost when a Dubins smoothing candidate left the map. Reject failed worldToMap conversion before indexing; keep collision thresholds and valid in-map candidates unchanged."
+    },
+    {
+      "path": "patches/0003-validate-final-footprints-and-bounds.patch",
+      "sha256": "e29e9c77b7c3507477d83e50d7c2d2b5f51dca0def33285bd724a1c127b38e89",
+      "apply_from": "nav2_smac_planner",
+      "changed_upstream_files": [
+        "src/collision_checker.cpp",
+        "src/smoother.cpp",
+        "src/smac_planner_lattice.cpp",
+        "test/test_smac_lattice.cpp",
+        "test/CMakeLists.txt"
+      ],
+      "added_files": [
+        "include/nav2_smac_planner/path_validation.hpp",
+        "test/test_path_validation.cpp"
+      ],
+      "reason": "Review regression fixes: reject exclusive upper bounds/nonfinite coordinates and smoother out-of-map candidates; validate filled final footprints with continuous orientation and half-cell interpolation, validate raw fallback or fail closed."
+    },
+    {
+      "path": "patches/0004-align-terminal-path-with-controller.patch",
+      "sha256": "ea10b6432a72750e80e8cff4104febd1538d1def94c61e518b791480519204da",
+      "apply_from": "nav2_smac_planner",
+      "changed_upstream_files": [
+        "include/nav2_smac_planner/smac_planner_lattice.hpp",
+        "src/smac_planner_lattice.cpp",
+        "test/CMakeLists.txt"
+      ],
+      "added_files": [
+        "test/test_lattice_terminal.cpp"
+      ],
+      "reason": "Optional controller-aligned Euclidean terminal window for diff/omni lattices preserves the exact goal on every returned path and validates full in-place yaw sweep plus bounded terminal connector. Near-goal handoff avoids curvature-search loops without marking navigation complete. Startup-only threshold remains separate from A* heuristic fallback tolerance; original lattice smoothing precedes the exact-goal connector."
+    }
+  ],
+  "files": {
+    "CMakeLists.txt": {
+      "source_path": "nav2_smac_planner/CMakeLists.txt",
+      "upstream_sha256": "aa7d5e186621171ebe56c5f2f217293c326335b3514424c27dcc448022cb57cb",
+      "vendored_sha256": "fcd6779f4fc01f06bf88869c70ed0f61a7ed3cb27e9e2ab8ed91dac1000939a1",
+      "modified": true
+    },
+    "LICENSE": {
+      "source_path": "LICENSE",
+      "upstream_sha256": "e71fcb65bd31cdbdcf50cf43ab87a0c600ea3ec407495c2e15d1e68bc9c3bfc1",
+      "vendored_sha256": "e71fcb65bd31cdbdcf50cf43ab87a0c600ea3ec407495c2e15d1e68bc9c3bfc1",
+      "modified": false
+    },
+    "README.md": {
+      "source_path": "nav2_smac_planner/README.md",
+      "upstream_sha256": "9367eb489fb2b3c3d0e0ee10c7e382f51f72c6830761ff5e5f1e0f6be25edc22",
+      "vendored_sha256": "9367eb489fb2b3c3d0e0ee10c7e382f51f72c6830761ff5e5f1e0f6be25edc22",
+      "modified": false
+    },
+    "include/nav2_smac_planner/a_star.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/a_star.hpp",
+      "upstream_sha256": "0011c2f0ddea1529362a1117674be3325d07b4022c3af71dee1eeed928f01f18",
+      "vendored_sha256": "0011c2f0ddea1529362a1117674be3325d07b4022c3af71dee1eeed928f01f18",
+      "modified": false
+    },
+    "include/nav2_smac_planner/analytic_expansion.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/analytic_expansion.hpp",
+      "upstream_sha256": "736c039c5da309775de548e0aba77c86985b3e4900c09da490d5f24bcd386986",
+      "vendored_sha256": "736c039c5da309775de548e0aba77c86985b3e4900c09da490d5f24bcd386986",
+      "modified": false
+    },
+    "include/nav2_smac_planner/collision_checker.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/collision_checker.hpp",
+      "upstream_sha256": "75bbb37f3364cd53cbc53483b6032552e568d01fcb1baa7176779cfeff5b22ed",
+      "vendored_sha256": "75bbb37f3364cd53cbc53483b6032552e568d01fcb1baa7176779cfeff5b22ed",
+      "modified": false
+    },
+    "include/nav2_smac_planner/constants.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/constants.hpp",
+      "upstream_sha256": "58b128c745193c6928545a43f1ba21f8fbd016dec3d99b7d14b5423dea7afae2",
+      "vendored_sha256": "58b128c745193c6928545a43f1ba21f8fbd016dec3d99b7d14b5423dea7afae2",
+      "modified": false
+    },
+    "include/nav2_smac_planner/costmap_downsampler.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/costmap_downsampler.hpp",
+      "upstream_sha256": "991784b72826a8fc97ae8db8d251b97343452b6f06a85c487bd1f565779e89fe",
+      "vendored_sha256": "991784b72826a8fc97ae8db8d251b97343452b6f06a85c487bd1f565779e89fe",
+      "modified": false
+    },
+    "include/nav2_smac_planner/node_2d.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/node_2d.hpp",
+      "upstream_sha256": "ce2cb7f4f8cb5d2419667ab0f8e969ec49d04a76680d892cafe305fb938ce64f",
+      "vendored_sha256": "ce2cb7f4f8cb5d2419667ab0f8e969ec49d04a76680d892cafe305fb938ce64f",
+      "modified": false
+    },
+    "include/nav2_smac_planner/node_basic.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/node_basic.hpp",
+      "upstream_sha256": "10d1e76854d9e798a2b6df79f115b7dcc4e3a9c525f5dcd74812d579acf1e844",
+      "vendored_sha256": "10d1e76854d9e798a2b6df79f115b7dcc4e3a9c525f5dcd74812d579acf1e844",
+      "modified": false
+    },
+    "include/nav2_smac_planner/node_hybrid.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/node_hybrid.hpp",
+      "upstream_sha256": "d1394a7f14e09e2ae0807557a3f813e952abc039bec1c1c3458db427e9d5a223",
+      "vendored_sha256": "d1394a7f14e09e2ae0807557a3f813e952abc039bec1c1c3458db427e9d5a223",
+      "modified": false
+    },
+    "include/nav2_smac_planner/node_lattice.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/node_lattice.hpp",
+      "upstream_sha256": "077b55225f6c1069bf8488aa9f979bd6e3bed5b198786be8bd7061d4e0ad9239",
+      "vendored_sha256": "077b55225f6c1069bf8488aa9f979bd6e3bed5b198786be8bd7061d4e0ad9239",
+      "modified": false
+    },
+    "include/nav2_smac_planner/smac_planner_2d.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/smac_planner_2d.hpp",
+      "upstream_sha256": "b2166494271e9d9ce89413891ddf08f59a0afa7ecb129492ba47260dd91c9e94",
+      "vendored_sha256": "b2166494271e9d9ce89413891ddf08f59a0afa7ecb129492ba47260dd91c9e94",
+      "modified": false
+    },
+    "include/nav2_smac_planner/smac_planner_hybrid.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/smac_planner_hybrid.hpp",
+      "upstream_sha256": "9aa02a4191927dca5f6a5daaab933eb81ceee5f34557dab9eb365ee52deac31e",
+      "vendored_sha256": "9aa02a4191927dca5f6a5daaab933eb81ceee5f34557dab9eb365ee52deac31e",
+      "modified": false
+    },
+    "include/nav2_smac_planner/smac_planner_lattice.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp",
+      "upstream_sha256": "3c27d16981e31c66ad50c7f3a04d6d97fe6f41d423ca61ed243f998b756eee06",
+      "vendored_sha256": "bc9517aea4cedd399d1903ff74dbe25c54e2e8c1271d1fcba7fc56728e2d3f64",
+      "modified": true
+    },
+    "include/nav2_smac_planner/smoother.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/smoother.hpp",
+      "upstream_sha256": "09305a27fa66128528266258d295cbca5cf40414a2ca367bddb6254ee335e49c",
+      "vendored_sha256": "09305a27fa66128528266258d295cbca5cf40414a2ca367bddb6254ee335e49c",
+      "modified": false
+    },
+    "include/nav2_smac_planner/thirdparty/robin_hood.h": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/thirdparty/robin_hood.h",
+      "upstream_sha256": "4e76d7fdd15d2f6033891c282e367538c212b7cedbe27373d96de3b7239448f2",
+      "vendored_sha256": "4e76d7fdd15d2f6033891c282e367538c212b7cedbe27373d96de3b7239448f2",
+      "modified": false
+    },
+    "include/nav2_smac_planner/types.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/types.hpp",
+      "upstream_sha256": "eb28aeda350c7f1e2621d6f54a6e58588035424094a14a9ae706ceabf5595cee",
+      "vendored_sha256": "eb28aeda350c7f1e2621d6f54a6e58588035424094a14a9ae706ceabf5595cee",
+      "modified": false
+    },
+    "include/nav2_smac_planner/utils.hpp": {
+      "source_path": "nav2_smac_planner/include/nav2_smac_planner/utils.hpp",
+      "upstream_sha256": "1dcfc6d72a9417fda68aa8d51c8f55ee2236279ff005fec48636ed8af29eb199",
+      "vendored_sha256": "1dcfc6d72a9417fda68aa8d51c8f55ee2236279ff005fec48636ed8af29eb199",
+      "modified": false
+    },
+    "lattice_primitives/README.md": {
+      "source_path": "nav2_smac_planner/lattice_primitives/README.md",
+      "upstream_sha256": "f0bc574aab82d6331f9123ae9588b89c74bcef136cbf95d1aa60fdb7f4f546c0",
+      "vendored_sha256": "f0bc574aab82d6331f9123ae9588b89c74bcef136cbf95d1aa60fdb7f4f546c0",
+      "modified": false
+    },
+    "lattice_primitives/config.json": {
+      "source_path": "nav2_smac_planner/lattice_primitives/config.json",
+      "upstream_sha256": "fde5032d343d8a57dd8a09a4ff36d2129079361ef65aa335328304742276ef7c",
+      "vendored_sha256": "fde5032d343d8a57dd8a09a4ff36d2129079361ef65aa335328304742276ef7c",
+      "modified": false
+    },
+    "lattice_primitives/constants.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/constants.py",
+      "upstream_sha256": "9f618c72d2428df571271eefc193a1525377e6df85e9579b4e9a8e5e8521edb8",
+      "vendored_sha256": "9f618c72d2428df571271eefc193a1525377e6df85e9579b4e9a8e5e8521edb8",
+      "modified": false
+    },
+    "lattice_primitives/docs/all_trajectories.png": {
+      "source_path": "nav2_smac_planner/lattice_primitives/docs/all_trajectories.png",
+      "upstream_sha256": "fabb12e661e7a0139d1684162caca3abe608b0166d73f8bdd8e0f88b95282975",
+      "vendored_sha256": "fabb12e661e7a0139d1684162caca3abe608b0166d73f8bdd8e0f88b95282975",
+      "modified": false
+    },
+    "lattice_primitives/docs/angle_discretization.png": {
+      "source_path": "nav2_smac_planner/lattice_primitives/docs/angle_discretization.png",
+      "upstream_sha256": "3319f38637050bf01a5f9f9c800b1c2f78e3362298f85f6f1e3fc8a7b783ec5b",
+      "vendored_sha256": "3319f38637050bf01a5f9f9c800b1c2f78e3362298f85f6f1e3fc8a7b783ec5b",
+      "modified": false
+    },
+    "lattice_primitives/generate_motion_primitives.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/generate_motion_primitives.py",
+      "upstream_sha256": "f318f9d2eed0259edab57c757cd20225fb3b34602ae4f4dc751b9d27d545ccee",
+      "vendored_sha256": "f318f9d2eed0259edab57c757cd20225fb3b34602ae4f4dc751b9d27d545ccee",
+      "modified": false
+    },
+    "lattice_primitives/helper.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/helper.py",
+      "upstream_sha256": "728c291e913d452adf9cafc59c652d6fb52b5f5d32ff3c5a2383c57205abbdba",
+      "vendored_sha256": "728c291e913d452adf9cafc59c652d6fb52b5f5d32ff3c5a2383c57205abbdba",
+      "modified": false
+    },
+    "lattice_primitives/lattice_generator.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/lattice_generator.py",
+      "upstream_sha256": "5aacf3995b9fe321fccdb1e5a44e1a566b1160c1ef89017d79b0927d5b5fe2b9",
+      "vendored_sha256": "5aacf3995b9fe321fccdb1e5a44e1a566b1160c1ef89017d79b0927d5b5fe2b9",
+      "modified": false
+    },
+    "lattice_primitives/requirements.txt": {
+      "source_path": "nav2_smac_planner/lattice_primitives/requirements.txt",
+      "upstream_sha256": "5d5cdd94c21d07fab2ae5c0b7889fe2a3916210ec5d6bf23630da0d884ce27d5",
+      "vendored_sha256": "5d5cdd94c21d07fab2ae5c0b7889fe2a3916210ec5d6bf23630da0d884ce27d5",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/ackermann/output.json": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/ackermann/output.json",
+      "upstream_sha256": "f76256d03898f62ea9c17121c806c6f4b8a3bc20b853e94a1cabf41dab2c8cc9",
+      "vendored_sha256": "f76256d03898f62ea9c17121c806c6f4b8a3bc20b853e94a1cabf41dab2c8cc9",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/all_trajectories.png": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/all_trajectories.png",
+      "upstream_sha256": "9aa462d6c33f8ac97c0b6044d8804ccd4aa929e9330ed5b9132220608200e5ae",
+      "vendored_sha256": "9aa462d6c33f8ac97c0b6044d8804ccd4aa929e9330ed5b9132220608200e5ae",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json",
+      "upstream_sha256": "105b37351d15e340cc2921fa8878c8ea727a65cd7e89c39c977be0654be3b2a9",
+      "vendored_sha256": "105b37351d15e340cc2921fa8878c8ea727a65cd7e89c39c977be0654be3b2a9",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/omni/output.json": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/0.5m_turning_radius/omni/output.json",
+      "upstream_sha256": "814733962e71376dada74193b7aa911b91f0c71b2b867f83994a6eefc0d0ee4b",
+      "vendored_sha256": "814733962e71376dada74193b7aa911b91f0c71b2b867f83994a6eefc0d0ee4b",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/ackermann/output.json": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/ackermann/output.json",
+      "upstream_sha256": "ba1a9c32527ce6c20546d110fd4a2f21e6eae9c3c37eb4f9fbe4c1310d6f04a0",
+      "vendored_sha256": "ba1a9c32527ce6c20546d110fd4a2f21e6eae9c3c37eb4f9fbe4c1310d6f04a0",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/all_trajectories.png": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/all_trajectories.png",
+      "upstream_sha256": "ea0de40244de927173d0efd81060337169b8a4e83ec9ccb148182b5e2f031d92",
+      "vendored_sha256": "ea0de40244de927173d0efd81060337169b8a4e83ec9ccb148182b5e2f031d92",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/diff/output.json": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/diff/output.json",
+      "upstream_sha256": "984ecd63a24eb705ad24a102f7b8021c2f5fa46dcced03122449308728625590",
+      "vendored_sha256": "984ecd63a24eb705ad24a102f7b8021c2f5fa46dcced03122449308728625590",
+      "modified": false
+    },
+    "lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/omni/output.json": {
+      "source_path": "nav2_smac_planner/lattice_primitives/sample_primitives/5cm_resolution/1m_turning_radius/omni/output.json",
+      "upstream_sha256": "4db540ac81b73094988e3544806f60fc5325428104a4aeaf00b2542d43d30c23",
+      "vendored_sha256": "4db540ac81b73094988e3544806f60fc5325428104a4aeaf00b2542d43d30c23",
+      "modified": false
+    },
+    "lattice_primitives/tests/test_lattice_generator.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/tests/test_lattice_generator.py",
+      "upstream_sha256": "dd7f1ecb659fa7e13cb093b2a6aab612065d24a6bc88f39e79fb757a5411199b",
+      "vendored_sha256": "dd7f1ecb659fa7e13cb093b2a6aab612065d24a6bc88f39e79fb757a5411199b",
+      "modified": false
+    },
+    "lattice_primitives/tests/test_trajectory_generator.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/tests/test_trajectory_generator.py",
+      "upstream_sha256": "e96f74af0e44cd313ea69ae8445cac7298f68dfb542047a923abb6801cb9414c",
+      "vendored_sha256": "e96f74af0e44cd313ea69ae8445cac7298f68dfb542047a923abb6801cb9414c",
+      "modified": false
+    },
+    "lattice_primitives/tests/trajectory_visualizer.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/tests/trajectory_visualizer.py",
+      "upstream_sha256": "af0e36eea1c19ef3f99fb7d11a50c4c80740c213a387e19138eb7a17d62f87d8",
+      "vendored_sha256": "af0e36eea1c19ef3f99fb7d11a50c4c80740c213a387e19138eb7a17d62f87d8",
+      "modified": false
+    },
+    "lattice_primitives/trajectory.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/trajectory.py",
+      "upstream_sha256": "c5f4627a60e97f4d0264f6853404cf61e4a672110509187f218be354e64d7925",
+      "vendored_sha256": "c5f4627a60e97f4d0264f6853404cf61e4a672110509187f218be354e64d7925",
+      "modified": false
+    },
+    "lattice_primitives/trajectory_generator.py": {
+      "source_path": "nav2_smac_planner/lattice_primitives/trajectory_generator.py",
+      "upstream_sha256": "4ef8867d5fc3bf6695e4f8d33d114410bac91ea0a5ef3d01ecd1abb0ea7e135a",
+      "vendored_sha256": "4ef8867d5fc3bf6695e4f8d33d114410bac91ea0a5ef3d01ecd1abb0ea7e135a",
+      "modified": false
+    },
+    "media/A.png": {
+      "source_path": "nav2_smac_planner/media/A.png",
+      "upstream_sha256": "08e43e2bffc82995dba01f6152db82d90d77be44758cc1b5f821c7e5c9f5ac31",
+      "vendored_sha256": "08e43e2bffc82995dba01f6152db82d90d77be44758cc1b5f821c7e5c9f5ac31",
+      "modified": false
+    },
+    "media/B.png": {
+      "source_path": "nav2_smac_planner/media/B.png",
+      "upstream_sha256": "77ac761a8d4cc9961ba866fe0e5b134f7916a98a8cd3f85f5a12285120817efb",
+      "vendored_sha256": "77ac761a8d4cc9961ba866fe0e5b134f7916a98a8cd3f85f5a12285120817efb",
+      "modified": false
+    },
+    "package.xml": {
+      "source_path": "nav2_smac_planner/package.xml",
+      "upstream_sha256": "1021988966789af2a242b691c9755f6c14a2e039e1ac75c442cb004d3cbe6c19",
+      "vendored_sha256": "1021988966789af2a242b691c9755f6c14a2e039e1ac75c442cb004d3cbe6c19",
+      "modified": false
+    },
+    "smac_plugin_2d.xml": {
+      "source_path": "nav2_smac_planner/smac_plugin_2d.xml",
+      "upstream_sha256": "a35298bc876fd79b05e0186f20288b4e2d8511fe134588ce14f3e5cc6ceff408",
+      "vendored_sha256": "a35298bc876fd79b05e0186f20288b4e2d8511fe134588ce14f3e5cc6ceff408",
+      "modified": false
+    },
+    "smac_plugin_hybrid.xml": {
+      "source_path": "nav2_smac_planner/smac_plugin_hybrid.xml",
+      "upstream_sha256": "dca4ef79921dc79cad3384997d9a4903a8283b998021c0a194c4a25347b8e2a9",
+      "vendored_sha256": "dca4ef79921dc79cad3384997d9a4903a8283b998021c0a194c4a25347b8e2a9",
+      "modified": false
+    },
+    "smac_plugin_lattice.xml": {
+      "source_path": "nav2_smac_planner/smac_plugin_lattice.xml",
+      "upstream_sha256": "983b9b43c86643312134b5c0093066b4d3b5924ba6f953050e41f1f575602bb2",
+      "vendored_sha256": "983b9b43c86643312134b5c0093066b4d3b5924ba6f953050e41f1f575602bb2",
+      "modified": false
+    },
+    "src/a_star.cpp": {
+      "source_path": "nav2_smac_planner/src/a_star.cpp",
+      "upstream_sha256": "5e33a489ff3eb77ff607326d7552798a1155023b7d82b669988b61d786fa9126",
+      "vendored_sha256": "5e33a489ff3eb77ff607326d7552798a1155023b7d82b669988b61d786fa9126",
+      "modified": false
+    },
+    "src/analytic_expansion.cpp": {
+      "source_path": "nav2_smac_planner/src/analytic_expansion.cpp",
+      "upstream_sha256": "47b90b88223825cee5edbaf0328c80db86cbfaf29c5aa9f3d78cd6189c4f32a4",
+      "vendored_sha256": "47b90b88223825cee5edbaf0328c80db86cbfaf29c5aa9f3d78cd6189c4f32a4",
+      "modified": false
+    },
+    "src/collision_checker.cpp": {
+      "source_path": "nav2_smac_planner/src/collision_checker.cpp",
+      "upstream_sha256": "de383f6e993ffdf1470025618f04ee06e7e18e690a3a5654569faab32713f509",
+      "vendored_sha256": "42ff595b4c07a8ee5faf7df922e6687f6bb280d7da6f4849197bb86831bfd6a1",
+      "modified": true
+    },
+    "src/costmap_downsampler.cpp": {
+      "source_path": "nav2_smac_planner/src/costmap_downsampler.cpp",
+      "upstream_sha256": "92ecc0c525871ffc513c3fc77005435aa2d2cfcd5f5dd35eb143946e0d68f28f",
+      "vendored_sha256": "92ecc0c525871ffc513c3fc77005435aa2d2cfcd5f5dd35eb143946e0d68f28f",
+      "modified": false
+    },
+    "src/node_2d.cpp": {
+      "source_path": "nav2_smac_planner/src/node_2d.cpp",
+      "upstream_sha256": "7262bea9fb096cba83a5516b575efa04c257ed66f49e5eea927246cf2e317526",
+      "vendored_sha256": "7262bea9fb096cba83a5516b575efa04c257ed66f49e5eea927246cf2e317526",
+      "modified": false
+    },
+    "src/node_basic.cpp": {
+      "source_path": "nav2_smac_planner/src/node_basic.cpp",
+      "upstream_sha256": "e2ea0bfea944e05450e254b594ca82066a0803e7e1667ddb3f0f703d7f32c2ee",
+      "vendored_sha256": "e2ea0bfea944e05450e254b594ca82066a0803e7e1667ddb3f0f703d7f32c2ee",
+      "modified": false
+    },
+    "src/node_hybrid.cpp": {
+      "source_path": "nav2_smac_planner/src/node_hybrid.cpp",
+      "upstream_sha256": "e398942dc085e8d060130c937b793f2b8dd3c94ddc5dc9d03ee143747e08c79f",
+      "vendored_sha256": "e398942dc085e8d060130c937b793f2b8dd3c94ddc5dc9d03ee143747e08c79f",
+      "modified": false
+    },
+    "src/node_lattice.cpp": {
+      "source_path": "nav2_smac_planner/src/node_lattice.cpp",
+      "upstream_sha256": "0e7431d8e65b20a8376c69647b34bf93937982632e7e8182df829e8b2c737836",
+      "vendored_sha256": "0e7431d8e65b20a8376c69647b34bf93937982632e7e8182df829e8b2c737836",
+      "modified": false
+    },
+    "src/smac_planner_2d.cpp": {
+      "source_path": "nav2_smac_planner/src/smac_planner_2d.cpp",
+      "upstream_sha256": "e1a59440163259b558d3d34b6a12a87df3e07558dec69b8a2521fa60112f4836",
+      "vendored_sha256": "e1a59440163259b558d3d34b6a12a87df3e07558dec69b8a2521fa60112f4836",
+      "modified": false
+    },
+    "src/smac_planner_hybrid.cpp": {
+      "source_path": "nav2_smac_planner/src/smac_planner_hybrid.cpp",
+      "upstream_sha256": "0cb74d083ffb55f3a5102897ab8ec0c9f750bdd04d7689f9c35e8eaa70e8c4a6",
+      "vendored_sha256": "0cb74d083ffb55f3a5102897ab8ec0c9f750bdd04d7689f9c35e8eaa70e8c4a6",
+      "modified": false
+    },
+    "src/smac_planner_lattice.cpp": {
+      "source_path": "nav2_smac_planner/src/smac_planner_lattice.cpp",
+      "upstream_sha256": "21510b24f2b60b06e50451052c7857d955ca7bf6595e3e075eb5a1553a41850c",
+      "vendored_sha256": "f9cb39f712ed63477e496ae42d733bbed24ad238d0afe8dd43214b19349d2146",
+      "modified": true
+    },
+    "src/smoother.cpp": {
+      "source_path": "nav2_smac_planner/src/smoother.cpp",
+      "upstream_sha256": "eb971009c1ceebf2f625dea989b4ff48bfb73e2a98b909ee50cbcdff316ba011",
+      "vendored_sha256": "319dfd6a73a82a36f366bf01c579ebe18001305511f2266fe023fdd95d9516f8",
+      "modified": true
+    },
+    "test/3planners.png": {
+      "source_path": "nav2_smac_planner/test/3planners.png",
+      "upstream_sha256": "98d1158c06458e36d88d04ea1ec0da17076bc1810303b61eaca0ef72f7ffa391",
+      "vendored_sha256": "98d1158c06458e36d88d04ea1ec0da17076bc1810303b61eaca0ef72f7ffa391",
+      "modified": false
+    },
+    "test/CMakeLists.txt": {
+      "source_path": "nav2_smac_planner/test/CMakeLists.txt",
+      "upstream_sha256": "10fed1ea1a9d8fd22c98d06350cb2faaf474658f6ed439be57de4279abdf29ef",
+      "vendored_sha256": "5b1128a9254606d9ef4fe7ef8d6035de7c6f3774465a419365b6f6acb67442fe",
+      "modified": true
+    },
+    "test/deprecated/options.hpp": {
+      "source_path": "nav2_smac_planner/test/deprecated/options.hpp",
+      "upstream_sha256": "4d99d56d79d7e571122b82fa1694405a8fa9db23d84e4eaf5a73a9bc5cb2fd5c",
+      "vendored_sha256": "4d99d56d79d7e571122b82fa1694405a8fa9db23d84e4eaf5a73a9bc5cb2fd5c",
+      "modified": false
+    },
+    "test/deprecated/smoother.hpp": {
+      "source_path": "nav2_smac_planner/test/deprecated/smoother.hpp",
+      "upstream_sha256": "edca0af0390bed02047a0f0b1d99384b154357b2e841d67fab57682165382549",
+      "vendored_sha256": "edca0af0390bed02047a0f0b1d99384b154357b2e841d67fab57682165382549",
+      "modified": false
+    },
+    "test/deprecated/smoother_cost_function.hpp": {
+      "source_path": "nav2_smac_planner/test/deprecated/smoother_cost_function.hpp",
+      "upstream_sha256": "66aa22120cdac7372fee1442135ac79c837a52772ca7997552b49e5303485840",
+      "vendored_sha256": "66aa22120cdac7372fee1442135ac79c837a52772ca7997552b49e5303485840",
+      "modified": false
+    },
+    "test/deprecated/upsampler.hpp": {
+      "source_path": "nav2_smac_planner/test/deprecated/upsampler.hpp",
+      "upstream_sha256": "fafe1c3b4599fc2b76468a779bcb07887bf8d640bd8da9628a0d5256e90d5a66",
+      "vendored_sha256": "fafe1c3b4599fc2b76468a779bcb07887bf8d640bd8da9628a0d5256e90d5a66",
+      "modified": false
+    },
+    "test/deprecated/upsampler_cost_function.hpp": {
+      "source_path": "nav2_smac_planner/test/deprecated/upsampler_cost_function.hpp",
+      "upstream_sha256": "9b1cc1b414777944a136d1a867f9d890c227f8f458c4a2a82feb6f2b75ecb39e",
+      "vendored_sha256": "9b1cc1b414777944a136d1a867f9d890c227f8f458c4a2a82feb6f2b75ecb39e",
+      "modified": false
+    },
+    "test/deprecated/upsampler_cost_function_nlls.hpp": {
+      "source_path": "nav2_smac_planner/test/deprecated/upsampler_cost_function_nlls.hpp",
+      "upstream_sha256": "a839eb393ac24d88ed83de331336a8f1a5d1630602103640ca1802edc0fcf8da",
+      "vendored_sha256": "a839eb393ac24d88ed83de331336a8f1a5d1630602103640ca1802edc0fcf8da",
+      "modified": false
+    },
+    "test/path.png": {
+      "source_path": "nav2_smac_planner/test/path.png",
+      "upstream_sha256": "16f1f683883b87992f4c2cd126663e87e7597b84d2462b5746ca883e607e0516",
+      "vendored_sha256": "16f1f683883b87992f4c2cd126663e87e7597b84d2462b5746ca883e607e0516",
+      "modified": false
+    },
+    "test/test_a_star.cpp": {
+      "source_path": "nav2_smac_planner/test/test_a_star.cpp",
+      "upstream_sha256": "b53d0e6ed3b7686e36212fc7e62dd71294ea36a1457029739959f94ff1a6e57e",
+      "vendored_sha256": "b53d0e6ed3b7686e36212fc7e62dd71294ea36a1457029739959f94ff1a6e57e",
+      "modified": false
+    },
+    "test/test_collision_checker.cpp": {
+      "source_path": "nav2_smac_planner/test/test_collision_checker.cpp",
+      "upstream_sha256": "b3df98279b1d93d204d7347deaa46ea8da360abf4d1d5ebd2978967c4793ab8d",
+      "vendored_sha256": "b3df98279b1d93d204d7347deaa46ea8da360abf4d1d5ebd2978967c4793ab8d",
+      "modified": false
+    },
+    "test/test_costmap_downsampler.cpp": {
+      "source_path": "nav2_smac_planner/test/test_costmap_downsampler.cpp",
+      "upstream_sha256": "9678d9bb6b3cefb101270b7918b32efdcffd96337dc6d916080c1e6f6e867ca5",
+      "vendored_sha256": "9678d9bb6b3cefb101270b7918b32efdcffd96337dc6d916080c1e6f6e867ca5",
+      "modified": false
+    },
+    "test/test_node2d.cpp": {
+      "source_path": "nav2_smac_planner/test/test_node2d.cpp",
+      "upstream_sha256": "010adf94b1463be641d05ba3798f7ff39c62a7341e5280d55be72a51171e7cee",
+      "vendored_sha256": "010adf94b1463be641d05ba3798f7ff39c62a7341e5280d55be72a51171e7cee",
+      "modified": false
+    },
+    "test/test_nodebasic.cpp": {
+      "source_path": "nav2_smac_planner/test/test_nodebasic.cpp",
+      "upstream_sha256": "a9949a51f483aacce398b20dc4fc48fd9dcd56b41648d89d323039b1997c5d2c",
+      "vendored_sha256": "a9949a51f483aacce398b20dc4fc48fd9dcd56b41648d89d323039b1997c5d2c",
+      "modified": false
+    },
+    "test/test_nodehybrid.cpp": {
+      "source_path": "nav2_smac_planner/test/test_nodehybrid.cpp",
+      "upstream_sha256": "d6b026f8ce4a676fe8e984d30dc18d02e3e529278e835c15ddbb5461de4f01a4",
+      "vendored_sha256": "d6b026f8ce4a676fe8e984d30dc18d02e3e529278e835c15ddbb5461de4f01a4",
+      "modified": false
+    },
+    "test/test_nodelattice.cpp": {
+      "source_path": "nav2_smac_planner/test/test_nodelattice.cpp",
+      "upstream_sha256": "d6beb9ec947e828cb3918f4957756d9a5a696b38b76d970a7a1bdd9b8b3b10d0",
+      "vendored_sha256": "d6beb9ec947e828cb3918f4957756d9a5a696b38b76d970a7a1bdd9b8b3b10d0",
+      "modified": false
+    },
+    "test/test_smac_2d.cpp": {
+      "source_path": "nav2_smac_planner/test/test_smac_2d.cpp",
+      "upstream_sha256": "d4448f8103ffc2cde49e42eeeb5f6c32b92aa9804362bb92f723c4d7a839ef32",
+      "vendored_sha256": "d4448f8103ffc2cde49e42eeeb5f6c32b92aa9804362bb92f723c4d7a839ef32",
+      "modified": false
+    },
+    "test/test_smac_hybrid.cpp": {
+      "source_path": "nav2_smac_planner/test/test_smac_hybrid.cpp",
+      "upstream_sha256": "70fc92bd46e3f3e948a421304352158b803cf636eaa991ef7044f8c2b5065bc1",
+      "vendored_sha256": "70fc92bd46e3f3e948a421304352158b803cf636eaa991ef7044f8c2b5065bc1",
+      "modified": false
+    },
+    "test/test_smac_lattice.cpp": {
+      "source_path": "nav2_smac_planner/test/test_smac_lattice.cpp",
+      "upstream_sha256": "a6393274cb43b42fd618cfbf6ea1b8f8410593afe9a4bcf9df72d422ef16236d",
+      "vendored_sha256": "830493a0a2be7fb544f58a08c8973df27f39ecf656bf75a3f874a918c21d3d39",
+      "modified": true
+    },
+    "test/test_smoother.cpp": {
+      "source_path": "nav2_smac_planner/test/test_smoother.cpp",
+      "upstream_sha256": "cf960774ca423471ab955f99693bf3f3ccfb4c8ad79e26717a7c351c229e835c",
+      "vendored_sha256": "cf960774ca423471ab955f99693bf3f3ccfb4c8ad79e26717a7c351c229e835c",
+      "modified": false
+    },
+    "test/test_utils.cpp": {
+      "source_path": "nav2_smac_planner/test/test_utils.cpp",
+      "upstream_sha256": "970b03f24754e92097475ce2ecf39bb9233c7364722a3035c98a061d9466a045",
+      "vendored_sha256": "970b03f24754e92097475ce2ecf39bb9233c7364722a3035c98a061d9466a045",
+      "modified": false
+    },
+    "test/test_smoother_bounds.cpp": {
+      "source_path": null,
+      "upstream_sha256": null,
+      "vendored_sha256": "3a263b02fedf21b6109cda27517208ebcef0cf4ccb1ca655976b29da6c4b77b4",
+      "modified": true,
+      "added_by_patch": "patches/0002-reject-smoother-boundary-outside-map.patch"
+    },
+    "include/nav2_smac_planner/path_validation.hpp": {
+      "source_path": null,
+      "upstream_sha256": null,
+      "added_by_patch": "patches/0003-validate-final-footprints-and-bounds.patch",
+      "vendored_sha256": "43a6eb15a4d9d0ea1eceb9a1336d56a56633eef4f7b45f521d0c86ae743fb370",
+      "modified": true
+    },
+    "test/test_path_validation.cpp": {
+      "source_path": null,
+      "upstream_sha256": null,
+      "added_by_patch": "patches/0003-validate-final-footprints-and-bounds.patch",
+      "vendored_sha256": "42a1eb03ec8cb19bbfab234190de6cb409340408ee49dd2b3caa4b8bac601ca7",
+      "modified": true
+    },
+    "test/test_lattice_terminal.cpp": {
+      "source_path": null,
+      "upstream_sha256": null,
+      "added_by_patch": "patches/0004-align-terminal-path-with-controller.patch",
+      "vendored_sha256": "86a285d0a5fe74f286df7ddec622516990dbb6bca20766307740ab8628eeddc1",
+      "modified": true
+    }
+  },
+  "local_metadata": [
+    "provenance.json",
+    "patches/0001-preserve-continuous-grid-coordinates.patch",
+    "patches/0002-reject-smoother-boundary-outside-map.patch",
+    "patches/0003-validate-final-footprints-and-bounds.patch",
+    "patches/0004-align-terminal-path-with-controller.patch"
+  ],
+  "reproduction": [
+    "Download the pinned upstream archive and extract nav2_smac_planner/.",
+    "Copy the upstream repository LICENSE into the package root.",
+    "Apply the recorded patches in list order from the extracted package directory.",
+    "Copy provenance.json and the patches directory from this vendored package.",
+    "Compare every file with its vendored_sha256; original bytes are identified by upstream_sha256.",
+    "Build this package through the normal colcon dependency graph using the intended ROS 2 Jazzy underlay."
+  ]
+}

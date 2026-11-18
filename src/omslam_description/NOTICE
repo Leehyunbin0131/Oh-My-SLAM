@@ -1,0 +1,12 @@
+The upstream directory contains unmodified base URDF and referenced meshes from
+Oh-My-MobileRobot, commit f85154b53ea57b80e8a8ff6e4d6d8d38a8a0c35b.
+Repository: https://github.com/Leehyunbin0131/Oh-My-MobileRobot
+Original CERN-OHL-P-2.0 LICENSE and NOTICE are preserved under upstream/.
+provenance.json records the exact paths and SHA256 of every included file.
+
+The Python simulation wrapper and ROS package integration are Apache-2.0.
+The dynamics/sensor construction follows the existing mobile_robot_sim model.py;
+its source hash and adapter changes are recorded in provenance.json.
+Original CAD link/joint origins, visual geometry and primitive collisions remain
+unchanged. The wrapper adds assumed inertias/friction, a simulation IMU mount,
+and Gazebo systems/sensors. These additions do not establish physical calibration.

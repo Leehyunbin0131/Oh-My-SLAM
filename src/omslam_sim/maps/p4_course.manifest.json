@@ -1,0 +1,23 @@
+{
+  "definition_sha256": "c571d400cfb33ad139225894f4456ee5ec5dfce23513f7bcbc6d2b62aab4a1a9",
+  "world": "p4_course",
+  "resolution": 0.05,
+  "map_origin": [
+    -1.2,
+    -1.2
+  ],
+  "width": 248,
+  "height": 208,
+  "purpose": "static geometry fixture, not a SLAM map",
+  "objects_excluded_from_map": [
+    "low_a",
+    "low_b",
+    "gate",
+    "crossing"
+  ],
+  "files": {
+    "worlds/p4_course.sdf": "69a6921fe5e9729ed3cf687f8a6fed01cb769087e075fba726426f989e81e2a9",
+    "maps/p4_course.pgm": "0c0d7f70b1c638703eacecdf45e74039674d89d600a195a7133e446840177583",
+    "maps/p4_course.yaml": "257997319b9ecb54ac669c3940160777a19bb5d0e59489271f8956de059ecc1c"
+  }
+}

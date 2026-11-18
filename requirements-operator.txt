@@ -1,0 +1,2 @@
+# Standalone Qt design preview; ROS is not required by the UI entry point.
+PySide6==6.8.3

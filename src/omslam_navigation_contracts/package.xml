@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>omslam_navigation_contracts</name><version>0.1.0</version>
+  <description>Installed Nav2 plugin boundary fixtures for P4 simulation acceptance.</description>
+  <maintainer email="Leehyunbin0131@users.noreply.github.com">Leehyunbin0131</maintainer>
+  <license>Apache-2.0</license><buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend><depend>nav2_util</depend><depend>nav2_core</depend>
+  <depend>nav2_costmap_2d</depend><depend>nav2_smac_planner</depend>
+  <depend>dwb_critics</depend><depend>dwb_core</depend><depend>dwb_msgs</depend>
+  <depend>tf2_ros</depend><depend>pluginlib</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

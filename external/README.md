@@ -1,7 +1,9 @@
 # 외부 소스
 
-`../dependencies.repos`의 고정 커밋을 이 위치로 가져오도록 계획합니다. 상위 저장소 자체에는 외부 Git checkout을 커밋하지 않습니다.
+`dependencies.repos`는 재사용 소스의 기준 커밋을 기록합니다. 이 디렉터리의 `COLCON_IGNORE`는 외부 저장소 안의 ROS 패키지나 workspace가 중복 빌드되는 것을 막습니다.
 
-이 디렉터리의 `COLCON_IGNORE`는 외부 저장소 안의 ROS 패키지나 기존 workspace가 자동으로 중복 빌드되는 것을 막습니다. 이후 vendor/description 패키지가 필요한 부분을 명시적으로 설치합니다.
+`omslam_control_vendor`는 지정 커밋의 필요한 호스트 모듈 6개를 소스에 포함하므로 일반 빌드에는 외부 checkout이 필요하지 않습니다. 파일 해시와 원본 라이선스를 함께 설치합니다.
 
-현재 계획 단계에서는 외부 소스를 import하거나 빌드하지 않았습니다.
+`src/nav2_smac_planner`는 Navigation2 1.3.13의 고정 커밋에서 가져온 패키지입니다. 충돌 검사에서 연속 좌표를 보존하고 smoother의 지도 밖 좌표 접근을 막는 패치를 포함하며, 일반 빌드는 이 소스를 사용합니다. `external/navigation2`는 원본 비교용으로만 사용하고 빌드하지 않습니다. 원본·변경 파일 해시, LICENSE와 재적용 가능한 패치는 패키지에 포함됩니다.
+
+현재 control 커밋은 공개 기준 `c703f13`에 원본 명령 시각 API를 확장한 **로컬 커밋**입니다. 원격에 게시되기 전에는 `vcs import`만으로 이 커밋을 받을 수 없습니다. 배포된 vendor 소스는 이 로컬 커밋과 동일하며, 실제 빌드는 이를 사용합니다. 원본 `Oh-My-Control` 작업 디렉터리와 개인 보정값은 변경하지 않습니다.

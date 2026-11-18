@@ -1,0 +1,11 @@
+imu_conditioner:
+  ros__parameters:
+    expected_frame: imu_link
+    gyro_bias_rad_s: [0.0, 0.0, 0.0]
+    # Initial variance for sources whose gyro covariance is entirely unknown.
+    # This is not a measured HFI-A9 noise calibration.
+    fallback_gyro_variance: [0.0001, 0.0001, 0.0001]
+    max_age_s: 0.2
+    future_tolerance_s: 0.02
+    calibration_file: ''
+    expected_identity: ''

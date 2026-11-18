@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<package format="3"><name>omslam_control_vendor</name><version>0.1.0</version><description>Pinned Oh-My-Control host protocol modules</description><maintainer email="hyunlee@users.noreply.github.com">Hyun Lee</maintainer><license>Apache-2.0</license><buildtool_depend>ament_cmake</buildtool_depend><exec_depend>python3-serial</exec_depend><export><build_type>ament_cmake</build_type></export></package>

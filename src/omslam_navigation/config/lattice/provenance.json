@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "package": "nav2_smac_planner",
+  "package_version": "1.3.13",
+  "repository": "https://github.com/ros-navigation/navigation2",
+  "source_ref": "1.3.13",
+  "source_path": "nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json",
+  "source_url": "https://github.com/ros-navigation/navigation2/blob/1.3.13/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json",
+  "installed_source": "/opt/ros/jazzy/share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json",
+  "destination": "diff_5cm_16h_r0p5.json",
+  "sha256": "105b37351d15e340cc2921fa8878c8ea727a65cd7e89c39c977be0654be3b2a9",
+  "license": "Apache-2.0",
+  "license_file": "LICENSE.nav2",
+  "modified": false,
+  "metadata": {
+    "motion_model": "diff",
+    "turning_radius": 0.5,
+    "grid_resolution": 0.05,
+    "stopping_threshold": 5,
+    "num_of_headings": 16,
+    "heading_angles": [
+      0.0,
+      0.4636476090008061,
+      0.7853981633974483,
+      1.1071487177940904,
+      1.5707963267948966,
+      2.0344439357957027,
+      2.356194490192345,
+      2.677945044588987,
+      3.141592653589793,
+      3.6052402625905993,
+      3.9269908169872414,
+      4.2487413713838835,
+      4.71238898038469,
+      5.176036589385496,
+      5.497787143782138,
+      5.81953769817878
+    ],
+    "number_of_trajectories": 112
+  }
+}

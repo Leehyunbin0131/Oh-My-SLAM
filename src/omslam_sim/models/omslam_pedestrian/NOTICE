@@ -1,0 +1,24 @@
+Walking actor mesh and animation
+================================
+
+Asset: meshes/walk.dae
+Source model: actor, uploaded by Mingfei to Gazebo Fuel
+Model URL: https://fuel.gazebosim.org/1.0/Mingfei/models/actor
+Fixed source version: 1
+File URL: https://fuel.gazebosim.org/1.0/Mingfei/models/actor/1/files/meshes/walk.dae
+
+License declared by the source model metadata:
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+The source COLLADA mesh, materials and walking animation are unmodified.
+The COLLADA contributor field identifies "Blender User" and Blender 2.63.5.
+No external textures are required by this asset.
+The exact source metadata, byte size and SHA256 are recorded in
+asset_manifest.json beside this notice.
+
+The model wrapper, deterministic route plugin and collision proxy are new
+Oh_My_SLAM code under Apache-2.0; that license does not replace the mesh license.
+Actors are visible to RGB and GPU-based sensors. The airport system moves a
+separate invisible cylinder proxy for physical contact. This is a scripted,
+kinematic pedestrian approximation, not a biomechanical or social crowd model.

@@ -19,14 +19,14 @@
 
 시뮬레이션(**Gazebo Harmonic**)과 실제 로봇(**Jetson Orin Nano Super + Arduino Mega 2560**)이 **동일한 ROS 2 토픽·TF·명령 수명 계약**을 공유하도록 설계하여, 가상 환경에서 검증한 위치추정·지도 작성·경로 주행·장애물 인지 파이프라인을 실물 로봇에 그대로 적용합니다.
 
-> **현재 저장소 상태 (`P0 완료`)**: 시스템 통합 아키텍처, 토픽·TF·명령 수명 계약, 단계별 구현 및 인수 검증 기준(`P1`~`P8`) 수립이 완료된 상태입니다. 실제 ROS 2 패키지와 실행 런치 파일은 아래 로드맵(`P1`~`P8`)에 따라 순차적으로 구현됩니다.
+> **현재 제공 기능**: **ROS 구동 브리지·엔코더 오도메트리·외장 IMU 입력·EKF**와 **2터미널 공항 환경·32명 보행자**를 제공합니다. 시뮬레이션에서 `slam_toolbox` 지도 작성·저장, AMCL 위치추정과 Nav2 목표 주행을 연결합니다. **Oh My Robot Console**은 지도 위에서 목적지 목록과 실제 ROS 센서·구동 계측을 함께 확인하고 목표 이동·직접 조종·지도 작업을 수행합니다. 단일·다중 목적지는 같은 이동 흐름을 사용하고 시스템 로그만 별도 화면으로 표시합니다. 실물 주행·Nav2는 단계별 구현 대상입니다. [콘솔 실행](docs/operator_gui.md) · [구동·EKF 실행](docs/base_ekf.md) · [로봇 시뮬레이션](docs/sim_robot.md) · [지도 작성·위치추정](docs/sim_mapping.md) · [공항 환경](docs/airport_world.md)
 
 ### 핵심 특징
 
 - **시뮬레이션–실물 단일 인터페이스 (`Sim-to-Real`)**: 상위 제어·위치추정·Nav2 구성을 공통으로 유지하고, 최하단 구동·센서 어댑터(`Gazebo DiffDrive` ↔ `Arduino Mega OMR1 USB`)와 기하 보정값만 교체
 - **1 kHz 실시간 모터 제어 보존**: Arduino Mega의 20 kHz 엔코더 디코딩·1 kHz 속도 PID·정지 위치 유지(`HOLD`)·300 ms 워치독을 그대로 활용하고, ROS 2 브리지(`omslam_base`)가 원본 명령 시각 보존과 실측 오도메트리를 담당
 - **엔코더 + IMU 센서 융합 및 2D SLAM**: 바퀴 엔코더 측정 오도메트리와 검증된 IMU 각속도를 `robot_localization`(EKF)으로 결합(`odom → base_footprint`)하고, 주행 모드에 따라 `slam_toolbox`와 `AMCL`이 `map → odom`을 배타적으로 발행
-- **자율주행 및 낮은 장애물 3D 기억 (`Nav2`)**: 보로노이 중심선 선호 비용을 적용한 전역 경로 계획(`NavFn`), 차체 외곽 기반 경로 추종(`RPP`), 라이다 스캔 평면 아래의 낮은 장애물을 감지·보존하는 RGB-D 비용지도 레이어 결합
+- **자율주행 및 낮은 장애물 3D 기억 (`Nav2`)**: 차체 방향과 기본 움직임 집합을 고려하는 전역 경로 계획(`Smac State Lattice`), 차체 외곽을 검사하는 지역 궤적 평가·장애물 회피(`DWB`), 라이다 스캔 평면 아래의 낮은 장애물을 감지·보존하는 RGB-D 비용지도 레이어 결합
 
 <a id="overview"></a>
 
@@ -49,7 +49,7 @@
 ```mermaid
 flowchart LR
     subgraph Upper["상위 주행 · 인지 (ROS 2 Jazzy)"]
-        Nav["수동 조종 / Nav2\n(NavFn + RPP)"]
+        Nav["수동 조종 / Nav2\n(State Lattice + DWB)"]
         Safety["Velocity Smoother\n+ Collision Monitor"]
         SLAM["slam_toolbox / AMCL\n+ RGB-D 낮은 장애물 기억"]
     end
@@ -74,7 +74,7 @@ flowchart LR
 | **하위 구동 (MCU)** | `Arduino Mega 2560` + [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control) | 1 kHz 속도 PID 제어, 정지 위치 유지(`HOLD`), 300 ms 명령 유효기간 감시, 20 Hz 엔코더 피드백 |
 | **ROS 2 베이스 브리지** | `omslam_base` (`LifecycleNode`) | `/cmd_vel`(`TwistStamped`) 수신·원본 수명 검사, 좌우 바퀴 목표 RPM 변환, 실측 `/wheel/odometry`·`/joint_states` 발행 |
 | **상태 추정 · 지도** | `robot_localization`, `slam_toolbox`, `AMCL` | 바퀴 오도메트리 + IMU 각속도 EKF 융합(`odom → base_footprint`), 실시간 지도 작성 또는 저장 지도 위치추정(`map → odom`) |
-| **경로 계획 · 안전** | `Nav2`, `omm_perception`, `omm_costmap_layers` | 보로노이 중심선 선호 전역 경로(`NavFn`), 경로 추종(`RPP`), RGB-D 낮은 장애물 기억, `Collision Monitor` 최종 감속/정지 |
+| **경로 계획 · 안전** | `Nav2`, `omm_perception`, `omm_costmap_layers` | 기본 움직임·차체 외곽을 고려한 전역 경로(`State Lattice`), 지역 궤적 평가·경로 추종(`DWB`), RGB-D 낮은 장애물 기억, `Collision Monitor` 최종 감속/정지 |
 
 <a id="roadmap"></a>
 
@@ -85,10 +85,10 @@ flowchart LR
 | 단계 | 목표 산출물 | 검증 환경 | 현재 상태 |
 | --- | --- | --- | --- |
 | **P0** | 통합 아키텍처, 토픽·TF·수명 명세, 단계별 인수 기준 및 저장소 구성 | 설계 · 정적 검증 | **완료** |
-| **P1** | ROS 구동 브리지(`omslam_base`), 원본 명령 수명 관리, 실측 엔코더 오도메트리 | 단위 시험 · 모의 장치(Mock) | 예정 |
-| **P2** | Gazebo Harmonic 공통 인터페이스, 로봇 URDF·가상 센서·TF 통합 | 시뮬레이션 | 예정 |
-| **P3** | EKF 상태 추정, `slam_toolbox` 지도 작성·저장, `AMCL` 재위치추정 | 시뮬레이션 | 예정 |
-| **P4** | `Nav2` 목표 주행, RGB-D 낮은 장애물 기억 레이어 및 보로노이 중심선 비용 이관 | 시뮬레이션 | 예정 |
+| **P1** | ROS 구동 브리지(`omslam_base`), 원본 명령 수명 관리, 실측 엔코더 오도메트리 | 단위 시험 · 모의 장치(Mock) | **브리지·엔코더 구현 및 모의 검증 완료** |
+| **P2** | Gazebo 공항 환경, 공통 인터페이스, 로봇 URDF·가상 센서·TF 통합 | 시뮬레이션 | **로봇·센서·TF 통합 및 시뮬레이션 검증 완료** |
+| **P3** | EKF 상태 추정, `slam_toolbox` 지도 작성·저장, `AMCL` 재위치추정 | 시뮬레이션 | **SLAM 지도·그래프 저장/복원 및 AMCL 재위치추정 검증 완료** |
+| **P4** | `State Lattice + DWB` 기본 주행·움직임 집합 구성, RGB-D 낮은 장애물 기억 레이어 이관 | 시뮬레이션 | 완료: 동일 실행의 목표 5곳 연속 도착 |
 | **P5** | Jetson Orin 실물 구동 브리지 배치, 지면 기하(반경·윤거)·IMU·오도메트리 검증 | 실물 로봇 | 예정 |
 | **P6** | 실물 수동 주행 SLAM 지도 작성·저장 및 `AMCL` 위치추정 | 실물 로봇 | 예정 |
 | **P7** | 실물 저장 지도 기반 `Nav2` 목표점 자율주행 및 장애물 회피·정지 검증 | 실물 로봇 | 예정 |
@@ -101,7 +101,7 @@ flowchart LR
 - **검증된 저수준 제어 코드 재사용**: `Oh-My-Control`의 시리얼 프로토콜(`OMR1`)·구동 보정·`WheelDrive` 모듈은 고정 커밋으로 재사용하며, Arduino Mega에 micro-ROS를 올리거나 호스트로 속도 PID를 옮기지 않습니다.
 - **원본 명령 시각 보존과 엄격한 워치독**: 속도 명령 체인은 `TwistStamped`로 통일하고, 중간 평활기(`Velocity Smoother`)를 거치더라도 **최초 명령이 생성된 시각 기준 300 ms 유효기간**을 넘기지 않도록 관리합니다.
 - **측정 기반 오도메트리와 단일 TF 소유권**: 목표 명령 적분이 아닌 **실제 엔코더 누적 변화량**과 검증된 IMU 각속도로 오도메트리를 생성하며, `odom → base_footprint`와 `map → odom` 변환은 각 모드에서 단 하나의 노드만 발행합니다.
-- **실용적 인지 범위 설정**: 시각 오도메트리(VO/VIO)는 사용하지 않으며, 라이다 높이 아래의 낮은 장애물은 RGB-D 깊이 기반 3D 점유 메모리로 보완합니다(AI 객체 분류·동적 객체 추적·별도 관제 GUI는 본 기본 자율주행 범위에서 제외).
+- **실용적 인지 범위 설정**: 시각 오도메트리(VO/VIO)는 사용하지 않으며, 라이다 높이 아래의 낮은 장애물은 RGB-D 깊이 기반 3D 점유 메모리로 보완합니다(AI 객체 분류·동적 객체 추적은 본 기본 자율주행 범위에서 제외).
 
 <a id="docs"></a>
 
@@ -109,10 +109,19 @@ flowchart LR
 
 | 문서 | 주요 내용 |
 | --- | --- |
+| [**구동 브리지·EKF 실행**](docs/base_ekf.md) | 엔코더·IMU 입력, lifecycle, 장착 TF, 빌드·실행과 모의 검증 |
 | [**통합 아키텍처 설계**](docs/architecture.md) | 호스트–Mega 연결 구조, 원본 명령 수명과 워치독 계약, 기구학·엔코더 오도메트리, 표준 토픽·QoS·TF 트리 설계 |
 | [**단계별 구현 계획**](docs/roadmap.md) | `P0`~`P8` 단계별 선행 조건, 구현 패키지 구성, 실행 모드 및 완료 기준 |
 | [**인수 검증 기준**](docs/acceptance.md) | 단계별 통합 시험(`V1`~`V8`) 묶음, 정량적 통과 기준, 실패 주입 범위 및 검증 기록 구조 |
 | [**기술 기준과 호환성**](docs/baseline.md) | 기준 OS·ROS 2 패키지 버전, 하드웨어·모델 기하 규격, 기존 시뮬레이션·실물 자산의 이관 범위 |
+| [**시뮬레이션 지도 작성·위치추정**](docs/sim_mapping.md) | SLAM/AMCL 모드, 지도·그래프 저장과 재로딩, 실행 절차 |
+| [**시뮬레이션 자율주행**](docs/sim_navigation.md) | 두 Nav2 모드, 구동 활성화·목표·정지·복구, 인지와 통합 검증 |
+| [**로봇 콘솔 실행**](docs/operator_gui.md) | 실제 ROS 계측, 통합 목적지 이동, 직접 조종, 지도 작업과 시스템 로그 |
+| [**통합 제어·모니터링 GUI 계획**](docs/operator_gui_plan.md) | 한 화면의 주행·계측, 통합 이동 흐름, 유지하는 데이터·제어 계약 |
+| [**P4 자율주행 작업 계획**](docs/p4_implementation_plan.md) | State Lattice+DWB·인지 이관, 센서·Nav2·구동 동시 검증과 결함 수정·재검증 계획 |
+| [**코드 리뷰·수정 검증**](docs/code_review.md) | 최종 경로 검증, 시간 역행·명령 경쟁·프로세스 교체 복구 및 MCU 시각 동기화 수정 결과 |
+| [**로봇·센서 시뮬레이션**](docs/sim_robot.md) | CAD 모델, 가상 라이다·IMU·RGB-D, 공통 명령·wheel/EKF·TF 연결 |
+| [**공항 시뮬레이션 환경**](docs/airport_world.md) | 2터미널 공간·가구·보행자, 빌드·실행, 기하 기반 참고 지도, 자산 재생성 |
 | [**스킬 평가 기록 규격**](docs/skill-evaluation.md) | 저장소 외부에서 관리하는 ROS 2 스킬 적용 이력 및 효과 분석 기록 형식 |
 
 <a id="workspace"></a>
@@ -126,8 +135,16 @@ flowchart LR
 ```bash
 git clone https://github.com/Leehyunbin0131/Oh_My_SLAM.git
 cd Oh_My_SLAM
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-up-to omslam_sim \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
+./sim.sh
 ```
+
+`./sim.sh`는 공항과 로봇·센서·EKF를 실행하며, `pedestrians:=false`로 보행자를 끌 수 있습니다. [공항 평면도](src/omslam_sim/maps/airport_floorplan.png)와 [실행 옵션](docs/airport_world.md)을 참고하세요.
+
+Nav2에서 직접 목표를 지정하려면 `omslam_navigation`까지 빌드한 뒤 **`./nav.sh`**를 실행합니다. Gazebo·Nav2·RViz 준비와 구동 활성화를 자동으로 처리합니다. 기본 시험 코스와 공항 선택, 종료 방법은 [자율주행 실행 안내](docs/sim_navigation.md#한-명령으로-실행)를 따릅니다.
 
 ## 라이선스
 
-이 저장소의 신규 코드와 문서에는 [Apache-2.0](LICENSE)을 적용합니다. 재사용하는 로봇 모델(`CERN-OHL-P-2.0`)과 외부 소스에는 각 원본 라이선스가 적용되며, 자세한 출처는 [NOTICE.md](NOTICE.md)를 참고하세요.
+이 저장소의 신규 코드와 문서에는 [Apache-2.0](LICENSE)을 적용합니다. 재사용하는 로봇 모델(`CERN-OHL-P-2.0`), 보행자 mesh(`CC BY 4.0`)와 외부 소스에는 각 원본 라이선스가 적용되며, 자세한 출처는 [NOTICE.md](NOTICE.md)를 참고하세요.

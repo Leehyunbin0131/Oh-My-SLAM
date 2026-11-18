@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/Leehyunbin0131/Oh-My-Control.git",
+  "commit": "5d5d65b6ba208383d3dede73ffb8a108cf786a76",
+  "parent_commit": "c703f130c14388b4b7845a25b900d726f8c9a71d",
+  "publication": "local commit; exact selected source is bundled for reproducible builds",
+  "files": {
+    "wheel_drive.py": "7a7485b9374a5393cf0b3e90ad612283168a6052614e25d35433a9faafb62241",
+    "motor_link.py": "30a9822f28583c457ac7810a6a56b258043945aad143eac3e6d8eb7d9d5b0e6e",
+    "motor_pid.py": "6bd9aa5212b66c6fc3867d0ce9662423dc851ef50bd13a318e41a0e624e9b4e8",
+    "drive_calibration.py": "cc148a870ac05c73eb1eee9f48aa5ec6e197d10a4c02a9a321fbde8221d3d614",
+    "serial_port.py": "7db8c1723dffc5b43904f269a7d0c98335c2a24296ad072f770c4f6164abb74e",
+    "hfi_a9.py": "92a08eb76d791a3a1035b29d8eb830b642547566dbb2ac76af5d0a78d9724341"
+  }
+}

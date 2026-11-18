@@ -1,0 +1,14 @@
+base_bridge:
+  ros__parameters:
+    backend: mock
+    left_radius: 0.068
+    right_radius: 0.068
+    wheel_separation: 0.480
+    counts_per_rev: 2652
+    max_rpm: 95.0
+    wheel_vx_variance: 0.0025
+    wheel_wz_variance: 0.01
+    port: ''
+    drive_calibration: ''
+    pid_config: ''
+    report_dir: /tmp/omslam-base

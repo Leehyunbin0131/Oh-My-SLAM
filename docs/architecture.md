@@ -63,11 +63,11 @@ Collision Monitor가 **마지막 속도 평활·장애물 처리 노드**가 됩
 
 ### 중요한 기존 API 차이
 
-현재 `WheelDrive.set_target_rpm()`은 호출 시점에 명령 생성 시각을 저장합니다. ROS 수신 이후 큐에서 지연된 명령을 넘기거나 smoother가 같은 stamp로 다시 출력할 때 이를 호출하면 수명이 늘어날 수 있습니다.
+공개 기준 `c703f13`의 `WheelDrive.set_target_rpm()`은 호출 시점에 명령 생성 시각을 저장합니다. ROS 수신 이후 큐에서 지연된 명령을 넘기거나 smoother가 같은 stamp로 다시 출력할 때 이를 호출하면 수명이 늘어날 수 있습니다.
 
-따라서 P1에는 **원래 명령 시각을 받는 최소 호스트 API 확장**을 포함합니다. 예: `set_target_rpm(left, right, issued_at=...)`. `issued_at`은 같은 프로세스에서 계산한 monotonic 시각이며, 기본 인수 미지정 시 기존 키보드 동작을 유지합니다. 같은 원본 stamp의 평활 출력은 목표값을 바꿀 수 있지만 deadline을 갱신하지 않습니다. 만료·미래 시각·역행 입력은 거부합니다.
+설치되는 vendor에는 **원래 명령 시각을 받는 호환 API 확장**을 포함합니다: `set_target_rpm(left, right, issued_at=...)`. `issued_at`은 같은 프로세스에서 계산한 monotonic 시각이며, 기본 인수 미지정 시 기존 키보드 동작을 유지합니다. 같은 원본 stamp의 평활 출력은 목표값을 바꿀 수 있지만 deadline을 갱신하지 않습니다. 만료·미래 시각·역행 입력은 거부합니다.
 
-이 변경은 메가 펌웨어·OMR1 프로토콜을 바꾸지 않습니다. 공통 라이브러리의 작은 호환 변경은 `Oh-My-Control`에 반영하고 `dependencies.repos`의 커밋을 갱신합니다. ROS 노드·기구학·launch·검증은 모두 `Oh_My_SLAM`에서 구현합니다. 검증 없이 private 속성을 직접 덮어쓰는 어댑터는 만들지 않습니다.
+이 변경은 메가 펌웨어·OMR1 프로토콜을 바꾸지 않습니다. 공통 라이브러리의 호환 변경은 `Oh-My-Control`의 격리된 로컬 커밋에 반영했고 `dependencies.repos`에 고정합니다. 동일 소스를 vendor에 포함하므로 빌드에 원격 커밋 다운로드는 필요하지 않습니다. ROS 노드·기구학·launch·검증은 모두 `Oh_My_SLAM`에서 구현합니다. 검증 없이 private 속성을 직접 덮어쓰는 어댑터는 만들지 않습니다.
 
 ### watchdog과 상태
 
@@ -107,7 +107,7 @@ rpm_L/R = omega_L/R * 60 / (2*pi)
 
 바퀴 상한을 넘으면 좌우에 같은 비율을 곱해 곡률을 보존합니다. 작은 명령을 임의로 30 RPM까지 올리지 않습니다. 기본 실물 시험이 성공한 30 RPM과 Nav2의 목표 근처 저속 제어 가능 범위는 별도로 확인합니다.
 
-현재 모델의 `r=0.068 m`, `b=0.480 m`는 초기값입니다. 이 값에서는 30 RPM 직진이 약 0.214 m/s, 양쪽 ±30 RPM 제자리 회전이 약 0.890 rad/s입니다. 실물 유효 반경·윤거는 지면에서 거리·회전각으로 보정합니다. 실물 운용 상한 95 RPM은 MCU 보호 상한 100 RPM과 구분하며, 시뮬레이션도 공통 운용 상한 95 RPM을 따르게 합니다.
+현재 모델의 `r=0.068 m`, `b=0.480 m`는 초기값입니다. 이 값에서는 30 RPM 직진이 약 0.214 m/s, 양쪽 ±30 RPM 제자리 회전이 약 0.890 rad/s입니다. 실물 유효 반경·윤거는 지면에서 거리·회전각으로 보정합니다. 실물 운용 상한 95 RPM은 MCU 보호 상한 100 RPM과 구분하며, 시뮬레이션의 바퀴별 상한은 100 RPM(직진 약 0.712 m/s)입니다.
 
 odometry는 **측정 엔코더 변화량**으로 계산합니다.
 
@@ -131,16 +131,20 @@ SE(2) 원호 적분을 사용하고 회전량이 매우 작은 경우 직선 극
 | `/cmd_vel/teleop`, `/cmd_vel/nav` | `TwistStamped` | 수동/자율 입력 → 소스 선택 | 새 의도 20 Hz 목표; reliable, volatile, depth 1 |
 | `/cmd_vel/requested` | `TwistStamped` | 선택 소스 → smoother·freshness 감시 | 원본 stamp 유지 |
 | `/cmd_vel/smoothed` | `TwistStamped` | smoother → collision monitor | 50 Hz 목표 |
-| `/cmd_vel` | `TwistStamped` | collision monitor → base | 유효 원본 stamp; reliable, volatile, depth 1 |
+| `/cmd_vel/monitored` | `TwistStamped` | collision monitor → navigation guard 최종 차단 | monitor가 보존한 원본 stamp |
+| `/cmd_vel` | `TwistStamped` | navigation guard → base | 유효 원본 stamp; reliable, volatile, depth 1; guard 단독 발행 |
 | `/wheel/odometry` | `nav_msgs/Odometry` | base/sim → EKF | 새 측정 20 Hz 실물; reliable, volatile |
 | `/joint_states` | `sensor_msgs/JointState` | base/sim → robot_state_publisher | 새 측정에 맞춤 |
 | `/imu/data` | `sensor_msgs/Imu` | 선택 IMU → EKF | 장치 실제 주기; sensor-data QoS와 호환 |
 | `/odom` | `nav_msgs/Odometry` | EKF → Nav2·진단 | 초기 50 Hz, 실측 입력 증가를 의미하지 않음 |
 | `/scan` | `sensor_msgs/LaserScan` | 라이다 → SLAM/AMCL/costmap | 실제 약 10 Hz 기준, best effort/volatile |
-| `/camera/depth/image_rect_raw`, `/camera/depth/camera_info` | `Image`, `CameraInfo` | D435i/가상 센서 → 인지 | 실제 frame·단위·intrinsics 확인 |
-| `/perception/health`, `/perception/memory` | 기존 이관 메시지 | 인지 → guard/costmap | 메시지 정의를 이관 시 고정 |
+| `/camera/depth/image_rect_raw`, `/camera/depth/camera_info` | `Image`, `CameraInfo` | D435i/가상 센서 → 인지 | 실제 frame·단위·intrinsics 확인; 시뮬레이션 depth는 reliable·volatile·depth 5로 bridge/인지/guard를 연결 (`depth_reliable=true`), CameraInfo는 sensor QoS |
+| `/perception/health`, `/perception/memory` | `omm_perception_msgs/PerceptionHealth`, `ObstacleMemory` | 인지 → guard/costmap | reliable, transient-local, depth 1; 원본 observation_stamp 별도 검사 |
+| `/navigation/state` | `std_msgs/String` JSON | navigation guard → 운용·검증 | 상태·차단 원인·준비 항목·활성화 epoch, transient-local depth 1 |
 | `/map` | `nav_msgs/OccupancyGrid` | SLAM 또는 map_server | map 소비 QoS에 맞는 transient local |
 | `/diagnostics` | `DiagnosticArray` | base·상태 감시 → 관측 | 1 Hz + 상태 변화 |
+
+시뮬레이션 영상·IMU가 `/clock`보다 먼저 도착하면 인지는 시계가 따라올 때까지 보관합니다. 미래 관측을 미리 처리하거나 현재 시각으로 바꾸지 않으며, 대기 중에도 최초 수신 기준 0.30초 만료를 연장하지 않습니다.
 
 QoS는 이름만 맞추는 것으로 끝내지 않고 endpoint의 offered/requested profile을 확인합니다. 동기화가 필요한 RGB-D·IMU의 timestamp 및 TF 유효 시각도 기록합니다.
 
@@ -170,7 +174,9 @@ flowchart LR
 
 EKF 활성 시 raw wheel odom·Gazebo·기존 ICP odometry의 odom TF 발행을 끕니다. 기존 `icp_odometry`는 새 기본 경로에서 실행하지 않습니다. `map → base_link`를 별도로 직접 발행하지 않습니다. [REP 105](https://github.com/ros-infrastructure/rep/blob/master/rep-0105.rst), [Nav2 robot_localization](https://docs.nav2.org/jazzy/configuration_and_development/first_time_robot_setup_guide/odom/setup_robot_localization/)
 
-EKF는 `two_d_mode=true`, `world_frame=odom`, `base_link_frame=base_footprint`를 출발점으로 합니다. 처음에는 wheel의 `vx`, `wz`와 한 IMU의 `wz`를 사용하고, 같은 엔코더에서 나온 pose와 twist를 독립 측정처럼 중복 결합하지 않습니다. 무횡이동 `vy=0` 제약과 covariance는 차체의 미끄러짐 조건을 보고 설정합니다. 자기장 yaw·선형 가속도·두 IMU 동시 결합은 기본값에 넣지 않습니다.
+EKF는 `two_d_mode=true`, `world_frame=odom`, `base_link_frame=base_footprint`를 출발점으로 합니다. 처음에는 wheel의 `vx`, `wz`와 한 IMU의 차체 기준 yaw rate를 사용하고, 같은 엔코더에서 나온 pose와 twist를 독립 측정처럼 중복 결합하지 않습니다. 무횡이동 `vy=0` 제약과 covariance는 차체의 미끄러짐 조건을 보고 설정합니다. 자기장 yaw·선형 가속도·두 IMU 동시 결합은 기본값에 넣지 않습니다. IMU 입력 마스크는 세 축 각속도를 선택해 장착 TF로 회전시킨 뒤 2D 제약을 적용합니다. 센서 Z축만 선택해 차체 yaw와 같다고 가정하지 않습니다.
+
+라이다의 `LaserScan`은 EKF에 직접 입력하지 않습니다. 기본 구성에서 라이다는 `slam_toolbox` 또는 AMCL이 `/odom`과 함께 사용해 `map → odom`을 보정합니다. 별도 scan matching으로 만든 라이다 odometry를 결합하는 방식은 가능하지만 기본 입력에는 포함하지 않습니다. EKF odom을 사전값으로 사용하는 SLAM 결과를 같은 EKF의 독립 측정처럼 되먹이지 않습니다.
 
 HFI-A9를 1차 yaw-rate 후보로 두되 축·bias·timestamp 검증을 먼저 수행합니다. D435i IMU는 깊이 바닥 추정과 센서 상태 확인에 사용할 수 있습니다. 카메라 pose·VO/VIO는 도입하지 않습니다.
 
@@ -190,12 +196,29 @@ Gazebo truth는 SLAM·EKF·Nav2 입력으로 사용하지 않습니다. 순수 �
 
 ## 8. Nav2·인지의 기본 선택
 
-- **공통 전역·지역 제어기 기준 (`NavFn` + `RPP`)**: 시뮬레이션과 실물 모두 첫 자율주행 기준을 `NavFn` 전역 계획기와 `Regulated Pure Pursuit (RPP)` 제어기로 통일하여 주행 특성 비교와 원인 분리를 명확히 합니다(`MPPI`·`State Lattice`는 기본 경로의 필수 항목에 포함하지 않음).
-- **보로노이 중심선 선호 레이어**: 보로노이 중심선은 별도의 전역 계획기가 아니라 **전역 비용지도(Costmap)의 선호 비용 레이어**로 결합하여, `NavFn`이 장애물과 충분한 여유를 둔 통로 중심선 경로를 선택하도록 유도합니다.
+- **공통 전역 계획·지역 제어 기준 (`State Lattice` + `DWB`)**: 시뮬레이션과 실물 모두 `nav2_smac_planner::SmacPlannerLattice` 전역 계획기와 `dwb_core::DWBLocalPlanner` 지역 제어기를 사용합니다. State Lattice는 위치·방향과 기본 움직임 집합으로 경로를 탐색하고, DWB는 현재 속도·주변 장애물에 맞는 지역 궤적을 평가해 명령을 선택합니다. 전역·지역 양쪽에 같은 기준의 사각형 footprint와 padding을 적용합니다.
+- **목표 접근·방향 정렬 계약**: launch는 도착 판정의 XY 허용오차를 Lattice와 DWB에 함께 전달합니다. 이 범위 안에서 Lattice는 현재 위치의 회전과 원래 목표까지의 짧은 연결을 footprint로 검사해 반환하며, 장애물과 unknown을 통과시키지 않습니다. 실제 성공은 원래 목표 방향과 측정 정지를 확인하는 `StoppedGoalChecker`가 판정합니다. 전역 탐색의 heuristic tolerance와 물리적 XY 도착 범위는 구분합니다.
+- **DWB 구동·충돌 계약**: 차동구동의 측면 속도는 `vy=0`으로 고정합니다. 속도·가감속 한도는 검증된 구동 범위에 맞추고 base의 바퀴별 상한(실물 95 RPM, 시뮬레이션 100 RPM)을 유지합니다. 사각형 footprint와 padding을 적용한 `ObstacleFootprint` critic을 필수로 사용하며, 충돌하는 후보는 경로·목표 비용이 낮아도 거부합니다. 경로 정렬·목표 도착·진동 억제 평가의 가중치와 속도 샘플은 P4의 코너·낮은 장애물·막힌 통로 시나리오에서 조정합니다. [DWB 설정](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/), [ObstacleFootprintCritic](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/trajectory_critics/obstacle_footprint/)
+- **기본 비용지도**: 표준 static·obstacle·inflation 레이어로 기본 주행을 먼저 구성합니다. 보로노이 전용 레이어와 중앙선 선호 검증은 초기 구현·인수 범위에서 제외합니다. 기본 주행 결과로 필요성이 확인되면 별도 변경 범위로 검토하며, 현재 단계의 완료 조건에 포함하지 않습니다.
+- **State Lattice 움직임 집합**: 사전 계산한 기본 움직임 집합(motion primitives / minimum control set)을 JSON으로 설치하고 `lattice_filepath`를 명시합니다. 차동구동 `diff` 모델과 전역 costmap의 격자 해상도를 맞추며, 초기 프로파일은 아래 표를 따릅니다. 움직임 집합·설정의 출처와 해시를 고정하고 PC·Orin에서 동일한 파일을 사용합니다. [Jazzy 움직임 집합 생성기](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_smac_planner/lattice_primitives/README.md)
 - **RGB-D 낮은 장애물 기억**: 라이다 스캔 높이 아래에 있는 낮은 장애물은 깊이 카메라 기반 바닥 분리 및 3D 점유 메모리(`omm_perception` / `camera_memory` 레이어)로 감지하고, 시야 밖으로 벗어나도 지역·전역 비용지도에 유지합니다(라이다 정적 SLAM 지도와 임시 장애물 메모리는 분리).
 - **루프 클로저 시 장애물 메모리 정합**: 장애물 메모리가 `odom` 프레임 기준일 때 루프 클로저로 `map → odom` 변환이 크게 보정되면 재투영 또는 무효화 규칙을 적용하며, 미관측 영역이나 깊이 무효값을 자유 공간(Free space)으로 오인하지 않습니다.
 - **보수적 회복(Recovery) 동작**: 실물 로봇의 초기 회복 동작은 **정지·대기·재계획**을 우선하며, 자율 후진이나 제자리 회전 회복은 차체 외곽(Footprint)과 후방 센서 관측 범위가 검증된 조건에서만 허용합니다.
 - **연산 자원 배분**: Jetson Orin에서 구동 제어·위치추정·Nav2를 실행하고, 무거운 Gazebo 시뮬레이터와 RViz 시각화는 개발 PC에서 실행합니다. CPU 부하로 제어 주기가 지연될 때는 카메라 해상도·프레임레이트나 시각화 전송량을 먼저 조정하며, 안전 워치독 기준을 임의로 완화하지 않습니다.
+
+### State Lattice 초기 프로파일
+
+| 항목 | 초기 기준과 적용 조건 |
+| --- | --- |
+| 움직임 모델 | `diff`: 전진 궤적과 제자리 회전 |
+| 전역 costmap·집합 해상도 | 모두 `0.05 m`; 서로 일치해야 함 |
+| 방향 구간 | 16개; 실제 각도는 JSON의 `heading_angles` 사용 |
+| 곡선 주행 반경 | `0.5 m` 예제로 P4 시작. 제자리 회전과 별도이며 실물의 측정된 최소 회전 반경을 뜻하지 않음 |
+| 후진 | 초기 `allow_reverse_expansion=false`, DWB `min_vel_x=0.0`; 후방 관측이 검증되지 않은 자율 후진을 계획·제어 양쪽에서 비활성화 |
+| 기준 출처 | `nav2_smac_planner` 1.3.13의 `sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json` |
+| 설치 자산 | `omslam_navigation`의 `share/omslam_navigation/config/lattice/diff_5cm_16h_r0p5.json`; launch에서 패키지 share 경로로 해석 |
+
+P4에서 해당 움직임 집합으로 생성한 전역 경로와 DWB의 코너·제자리 회전 추종을 함께 확인합니다. 차체 충돌 검사는 실제 footprint를 별도로 사용하며, 경로 후처리 결과도 같은 조건을 만족해야 합니다. P5 실측으로 곡선 주행 조건을 조정할 필요가 확인되면 집합·설정을 갱신하고 영향을 받는 기존 시나리오만 다시 확인합니다.
 
 ## 9. 실행 모드와 준비 조건
 

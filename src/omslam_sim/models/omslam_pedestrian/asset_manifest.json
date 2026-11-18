@@ -1,0 +1,45 @@
+{
+  "asset": "meshes/walk.dae",
+  "source_url": "https://fuel.gazebosim.org/1.0/Mingfei/models/actor/1/files/meshes/walk.dae",
+  "source_model": "https://fuel.gazebosim.org/1.0/Mingfei/models/actor",
+  "source_version": 1,
+  "source_owner": "Mingfei",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "sha256": "49af0df3a319d1cb8ca2cebf02dbd00f625e5d5bec820bc5e109925b18b65c6e",
+  "bytes": 2277322,
+  "changes": "Unmodified source COLLADA mesh, materials and walking animation. No external texture references.",
+  "source_metadata": {
+    "createdAt": "2019-08-21T07:41:46Z",
+    "updatedAt": "2026-11-12T11:26:19Z",
+    "name": "actor",
+    "owner": "Mingfei",
+    "description": "",
+    "likes": 0,
+    "downloads": 52873,
+    "filesize": 11222368,
+    "upload_date": "2019-08-21T07:41:39Z",
+    "modify_date": "2019-08-21T07:41:39Z",
+    "license_id": 2,
+    "license_name": "Creative Commons Attribution 4.0 International",
+    "license_url": "http://creativecommons.org/licenses/by/4.0/",
+    "license_image": "https://i.creativecommons.org/l/by/4.0/88x31.png",
+    "permission": 0,
+    "url_name": "",
+    "thumbnail_url": "/Mingfei/models/actor/tip/files/thumbnails/1.png",
+    "version": 1,
+    "private": false,
+    "tags": [
+      "person",
+      "animation"
+    ]
+  },
+  "animation_calibration": {
+    "root_node": "Hips",
+    "first_time_s": 0.04166662,
+    "last_time_s": 5.791666,
+    "root_forward_travel_m": 1.38424027,
+    "animation_seconds_per_metre": 4.153902689162482,
+    "interpretation": "Source animation time / root X displacement; used to scale the walking animation with scripted travelled distance."
+  }
+}

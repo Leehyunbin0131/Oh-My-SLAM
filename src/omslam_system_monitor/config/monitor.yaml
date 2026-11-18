@@ -1,0 +1,5 @@
+system_monitor:
+  ros__parameters:
+    host_role: host
+    disk_path: /
+    sample_period: 1.0

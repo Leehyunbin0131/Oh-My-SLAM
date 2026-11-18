@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <actor name="omslam_pedestrian">
+    <pose>0 0 1.0 0 0 0</pose>
+    <skin>
+      <filename>model://omslam_pedestrian/meshes/walk.dae</filename>
+      <scale>1.0</scale>
+    </skin>
+    <animation name="walk">
+      <filename>model://omslam_pedestrian/meshes/walk.dae</filename>
+      <scale>1.0</scale>
+      <interpolate_x>true</interpolate_x>
+    </animation>
+    <script><loop>true</loop><auto_start>false</auto_start></script>
+  </actor>
+</sdf>

@@ -1,0 +1,68 @@
+{
+  "source": "mobile_robot_sim",
+  "source_revision": null,
+  "source_license": "Apache-2.0",
+  "migration": "P4 selected perception algorithms and obstacle memory layer; source directory has no Git history",
+  "files": [
+    {
+      "source_path": "omm_perception/CMakeLists.txt",
+      "target_path": "CMakeLists.txt",
+      "sha256": "183885fd596820fcf93de3a1c77f90a2916598b0a6718d8a2f3e67adfcfe33ab"
+    },
+    {
+      "source_path": "omm_perception/LICENSE",
+      "target_path": "LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "source_path": "omm_perception/include/omm_perception/ground.hpp",
+      "target_path": "include/omm_perception/ground.hpp",
+      "sha256": "3d99a58cfc7c60e626d360cb933b1a947c8752c352544df3533c7757dd9d8fdc"
+    },
+    {
+      "source_path": "omm_perception/include/omm_perception/memory.hpp",
+      "target_path": "include/omm_perception/memory.hpp",
+      "sha256": "8d4b78bd4eea7f7af5ea4ba58c57bcc32decb3ea3b6294d22bbf6b3834b42611"
+    },
+    {
+      "source_path": "omm_perception/include/omm_perception/tracker.hpp",
+      "target_path": "include/omm_perception/tracker.hpp",
+      "sha256": "163497a37933f6997928a34e2bce6e06430123f75e42f0164a6243c3d14850d1"
+    },
+    {
+      "source_path": "omm_perception/package.xml",
+      "target_path": "package.xml",
+      "sha256": "55290dccea854662bc9e687842bb1e54066447f49d34be854208aef2ad04324f"
+    },
+    {
+      "source_path": "omm_perception/src/ground.cpp",
+      "target_path": "src/ground.cpp",
+      "sha256": "a8f7c0589beb4ddaeca894d3266f77fa5b2a186c011ab2cf165c3fa187c72301"
+    },
+    {
+      "source_path": "omm_perception/src/memory.cpp",
+      "target_path": "src/memory.cpp",
+      "sha256": "2d23dd556ac8d3d179a511dfe4d3795613f3b1b0e6ab10e75d6d5ce7cc979683"
+    },
+    {
+      "source_path": "omm_perception/src/obstacle_memory_node.cpp",
+      "target_path": "src/obstacle_memory_node.cpp",
+      "sha256": "337151885b16e5f230fa7f57502a7111a0624235c2020e98a77dbb09d14cbcb9"
+    },
+    {
+      "source_path": "omm_perception/src/tracker.cpp",
+      "target_path": "src/tracker.cpp",
+      "sha256": "f72c6ba14662f57506aefa83dc3ba0c1f54932dd9a023125c5db02c75dc2ecd4"
+    },
+    {
+      "source_path": "omm_perception/test/test_geometry.cpp",
+      "target_path": "test/test_geometry.cpp",
+      "sha256": "8e402cd8b36beeba03ecc94c4366f0ed8b33c1508f400158f56cae6d7ebf7198"
+    },
+    {
+      "source_path": "omm_perception/test/test_memory.cpp",
+      "target_path": "test/test_memory.cpp",
+      "sha256": "d27b38fc15a05a7b1c4272df6de501adbfbb8eb66a438c7d9db9517d68aba1ac"
+    }
+  ]
+}
