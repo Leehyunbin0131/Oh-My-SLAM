@@ -30,8 +30,8 @@ P4의 기존 합격 기준은 **목표 위치 오차 ≤0.15 m, yaw 오차 ≤0.
 | --- | --- | --- |
 | 작업 저장소 | `~/MyRos/Oh_My_SLAM` | 신규 ROS 패키지·설정·문서 작성 위치 |
 | ROS 환경 | ROS 2 Jazzy, `/opt/ros/jazzy` | 다른 배포판 API 혼용 금지 |
-| Nav2 설치 버전 | 관련 planner/controller/costmap/smoother/monitor 모두 `1.3.13` | 공식 문서와 해당 버전 소스를 함께 대조 |
-| Smac 호환 패치 | 공식 `1.3.13` 커밋 `f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501` | 연속 좌표 충돌 검사만 보완한 workspace 설치본; 원본/변경 해시·패치 보존 |
+| Nav2 설치 버전 | workspace Smac `1.3.13`, Jazzy 제어기·DWB·속도 평활기·충돌 감시기 `1.3.14` | 검증 결과에 실행 바이너리와 설치 패키지 버전을 기록 |
+| Smac 호환 패치 | 공식 `1.3.13` 커밋 `f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501` | 연속 좌표·차체 충돌 검사, 목표 접근, Lattice 탐색을 보완한 설치본. 패키지에 원본·수정본 해시와 재현 패치를 보존 |
 | SLAM | `slam_toolbox 2.8.5` | P3의 mapping/localization 패키지 재사용 |
 | 빌드 방식 | isolated copy install, Release, `/usr/bin/python3` | 기존 빌드 규칙 유지; 새 셸에서 설치본 확인 |
 | 구동·상태 추정 | `omslam_base`, `omslam_sim`, `omslam_localization` | 엔코더·IMU·EKF와 300 ms 원본 명령 수명 유지 |
@@ -205,13 +205,13 @@ Nav2 lifecycle manager는 collision monitor·smoother·planner·controller·wait
 | controller | ID `FollowPath`, `dwb_core::DWBLocalPlanner`, 20 Hz |
 | 속도 | `0≤vx≤0.712094 m/s`, `vy=0`, `abs(wz)≤0.60 rad/s` |
 | 가감속 | `ax=0.25 m/s²`, 감속 `−0.50 m/s²`, `aθ=0.60 rad/s²`, 각감속 `−1.00 rad/s²` |
-| DWB 샘플 | `vx_samples=20`, `vy_samples=1`, `vtheta_samples=20`, `sim_time=1.7 s`, linear/angular granularity 각각 `0.025 m`/`0.025 rad` |
+| DWB 샘플 | `vx_samples=20`, `vy_samples=1`, `vtheta_samples=20`. 기본 예측은 1.7초이며, 저속에서는 허용 선속도로 지역 비용지도 두 셀(0.10 m)을 비교할 시간까지 연장한다. 병진·회전 표본 간격은 0.025 m와 0.025 rad이다. |
 | DWB 최소 속도 | `min_speed_xy=0`, `min_speed_theta=0`; 작은 속도를 임의의 최소 RPM으로 증폭하지 않음 |
 | critics | `ObstacleFootprint`, `RotateToGoal`, `Oscillation`, `GoalAlign`, `PathAlign`, `PathDist`, `GoalDist` |
 | 초기 critic scale | `ObstacleFootprint=1`, `RotateToGoal=32`, `Oscillation=1`, `GoalAlign=24`, `PathAlign=32`, `PathDist=32`, `GoalDist=24`; 충돌 거부를 비용 가중치로 무력화하지 않음 |
-| goal checker | `nav2_controller::StoppedGoalChecker`, `xy_goal_tolerance=0.10 m`, `yaw_goal_tolerance=0.15 rad`, `stateful=true`, `trans_stopped_velocity=0.01 m/s`, `rot_stopped_velocity=0.02 rad/s` |
+| goal checker | `nav2_controller::StoppedGoalChecker`, `stateful=false`. 매 주기에 원래 목표와의 거리 0.10 m, 방향 오차 0.15 rad, 측정 병진 속도 0.01 m/s, 회전 속도 0.02 rad/s를 함께 확인한다. |
 | DWB 목표 정지 | `xy_goal_tolerance=0.10 m`, `trans_stopped_velocity=0.01 m/s`, `RotateToGoal.slowing_factor=5.0`, `RotateToGoal.lookahead_time=−1.0` |
-| progress checker | `nav2_controller::PoseProgressChecker`, 이동 `0.10 m` 또는 회전 `0.10 rad`, allowance `10 s`; 제자리 방향 정합을 이동 실패로 오인하지 않음 |
+| progress checker | `omslam_navigation::SpeedAwareProgressChecker`. 10초 동안 이동 0.10 m 또는 회전 0.10 rad를 요구한다. 콘솔에서 속도를 제한하면 각 기준은 승인된 해당 속도로 5초간 이동·회전할 수 있는 양까지 낮아진다. |
 | controller 실패 | `failure_tolerance=0.3 s`, 비용지도 update timeout `0.3 s` |
 | 전역 costmap | `map`, 0.05 m, update 2 Hz/publish 1 Hz, unknown 유지 |
 | 지역 costmap | `odom`, rolling `6×6 m`, 0.05 m, update 10 Hz/publish 5 Hz |
@@ -461,7 +461,7 @@ I14에서 검증기가 simulator를 별도 소유하고 navigation launch는 `st
 | V4-01 | 올바른 installed plugin, diff/0.05 m/16 heading, 공식 자산 hash 일치 | manifest·파라미터 dump·plugin 로드 로그 |
 | V4-02 | 모든 성공 목표의 truth 기준 위치 ≤0.15 m, yaw ≤0.20 rad | 목표 UUID·최종 map pose·고정 정합 truth·오차 |
 | V4-03 | 접촉 0회, 기록된 경로와 실제 차체의 충돌 0 | world obstacle geometry와 swept footprint 검사, contact 정보 사용 가능 시 함께 기록 |
-| V4-04 | 전 구간 `vy=0`, 지원하지 않는 축 0, 바퀴별 명령 ≤100 RPM (시뮬레이션) | 원본·smoothed·monitored·final 명령과 기구학 계산 |
+| V4-04 | 각 단계의 선속도·각속도 한도 및 미지원 축 0, 최종 Gazebo 출력의 바퀴별 명령 ≤ 실행 중인 베이스의 상한(기본 100 RPM) | DWB 원본부터 `/sim/cmd_vel`까지 6개 토픽, 실행 중인 좌우 반경·윤거·RPM 파라미터 |
 | V4-05 | 0.80 m 통로 실제 통과, 차체 모서리 충돌 경로/후보 거부 | 통로 내부 trajectory, planner/DWB fixture 및 실행 근거 |
 | V4-06 | cancel 후 신규 nonzero 생성 중단, 1.0 s 안에 측정 정지, 새 UUID로 재출발 | action terminal state·final zero·측정 속도 |
 | V4-07 | 닫힌 gate 반영 후 30 s 이내 ABORTED, 무한 recovery 없음 | 비용지도 반영 시각·BT 상태·action 결과 |

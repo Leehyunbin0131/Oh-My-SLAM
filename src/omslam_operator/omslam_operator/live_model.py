@@ -61,7 +61,6 @@ class LiveConsoleModel(ConsoleModel):
         self._map_inflight = None
         self._map_response_seen = None
         self._needs_initial_pose = False
-        self._initial_pose_sent = False
         self._map_name = ''
         self._notice = ''
         self._notice_at = 0.
@@ -391,6 +390,7 @@ class LiveConsoleModel(ConsoleModel):
         self._halt_queue('제어 연결 종료')
         with self.s.lock:
             self.s.latest_manual = self.s.latest_heartbeat = None
+            self.s.cancel_unsent_goal()
             self.s.controls = type(self.s.controls)(
                 ((kind, data) for kind, data in self.s.controls if kind in ('view', 'stop')),
                 maxlen=32)
@@ -407,12 +407,14 @@ class LiveConsoleModel(ConsoleModel):
         if self._fresh() and session:
             if self.guard_session and session != self.guard_session:
                 self._drop_control('제어 서버가 다시 시작되어 관측 모드로 연결합니다')
-                # A new guard has no old action; never resume the previous route.
+                # A guard session owns one map. SLAM grid revisions within it
+                # retain the same map frame; a replacement backend does not.
                 self.queue_running = self.queue_waiting = False
                 self.queue_index = None
-                for goal in self.queue:
-                    if goal['status'] != '완료':
-                        goal['status'] = '중단됨'
+                self.queue.clear()
+                self._map_name = ''
+                self._needs_initial_pose = False
+                self._refresh_goals()
             self.guard_session = session
         if not self._fresh():
             if self.token or self._pending or self._request:
@@ -428,6 +430,7 @@ class LiveConsoleModel(ConsoleModel):
             else:
                 self._event(response.get('message', '제어 요청이 거부되었습니다'))
                 self._pending = None
+                self._speed_dirty = False
                 self._held = False
                 self._halt_queue('제어 요청 실패')
         elif request and time.monotonic() - request['sent'] > 8.:
@@ -449,6 +452,7 @@ class LiveConsoleModel(ConsoleModel):
             return
         if time.monotonic() - pending['started'] > 15.:
             self._pending = None
+            self._speed_dirty = False
             self._held = False
             self._event('요청 준비 시간 초과. 상태를 확인한 뒤 다시 요청하세요')
             return
@@ -555,7 +559,8 @@ class LiveConsoleModel(ConsoleModel):
         if not self.queue:
             self._event('지도에 목적지를 추가하세요')
             return
-        if self._needs_initial_pose or self._ui.get('needsInitialPose'):
+        if (self._needs_initial_pose or (self._control_state.get('localization_mode') == 'amcl'
+                                        and not self._control_state.get('localization_initialized'))):
             self._event('불러온 지도에 현재 로봇 위치·방향을 지정하세요')
             return
         for goal in self.queue:
@@ -615,9 +620,14 @@ class LiveConsoleModel(ConsoleModel):
         if maximum <= 0 or not maximum / 100. <= linear <= maximum:
             self._event('속도를 서버가 허용한 RPM 범위 안에서 지정하세요')
             return
+        if not self._owned():
+            pending_speed = self._pending and self._pending['kind'] == 'speed'
+            if not pending_speed and (self._pending or self._request or not self._begin('speed', 'DISABLED')):
+                return
+            if not self._fresh() or self._control_state.get('owner_id') not in ('', self.owner):
+                self._drop_control('제어 상태가 변경되어 속도 요청을 취소했습니다')
+                return
         self._desired_linear, self._speed_dirty = float(linear), True
-        if not self.token and not self._pending:
-            self._begin('speed', 'DISABLED')
         self._advance_pending()
         self._apply_speed()
 
@@ -739,10 +749,7 @@ class LiveConsoleModel(ConsoleModel):
                     self.queue_running = self.queue_waiting = False
                     self.queue_index = None
                     self._needs_initial_pose = operation == 'localize'
-                    self._initial_pose_sent = False
                     self._map_name = (Path(self._map_inflight['path']).name if operation == 'localize' else '새 지도 · SLAM')
-                elif operation == 'initialpose':
-                    self._initial_pose_sent = True
                 elif operation == 'save':
                     self._map_name = Path(self._map_inflight['path']).name
             self._event(map_response.get('message', '지도 작업 응답'))
@@ -759,8 +766,9 @@ class LiveConsoleModel(ConsoleModel):
             self._speed_request = None
             self._pending = None
             self._event('속도 제한 응답 시간 초과')
-        if (self._needs_initial_pose and self._initial_pose_sent and self._fresh()
-                and self._control_state.get('auto_ready')):
+        if (self._needs_initial_pose and self._fresh() and self._control_state.get('auto_ready')
+                and self._control_state.get('localization_mode') == 'amcl'
+                and self._control_state.get('localization_initialized')):
             self._needs_initial_pose = False
             self._event('초기 위치와 주행 준비가 확인되었습니다')
         self._apply_speed()
@@ -827,9 +835,8 @@ class LiveConsoleModel(ConsoleModel):
         mode = op.get('mode', 'DISABLED') if fresh else 'DISABLED'
         phase = op.get('phase', '') if fresh else ''
         owner_busy = fresh and op.get('owner_id') not in ('', self.owner)
-        reconnect_pose_needed = (fresh and map_ready and not op.get('auto_ready', False)
-            and not d.get('amcl_pose_seen', False)
-            and any(name.rsplit('/', 1)[-1] == 'amcl' for name in d.get('nodes', [])))
+        reconnect_pose_needed = (fresh and map_ready and op.get('localization_mode') == 'amcl'
+                                 and not op.get('localization_initialized'))
         needs_pose = self._needs_initial_pose or reconnect_pose_needed
         result = d.get('goal_result', {})
         error = str(result.get('message', '')).lower()

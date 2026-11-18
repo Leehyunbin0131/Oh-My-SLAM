@@ -12,6 +12,8 @@ import sys
 import threading
 import tempfile
 import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from copy import deepcopy
 
@@ -186,6 +188,7 @@ class MapSupport(Node):
         self.state_at = 0.
         self.map_stamp = 0
         self.map_received_at = 0.
+        self.amcl_estimate = (0, 0.)
         self.keepout_lock = threading.Lock()
         self.keepout_sessions = {}
         self.loaded_map_path = None
@@ -202,10 +205,29 @@ class MapSupport(Node):
         self.stop_client = self.create_client(Trigger, '/operator/stop', callback_group=group)
         self.control = self.create_client(Control, '/operator/control', callback_group=group)
         self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 1)
+        self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.receive_amcl, 1,
+                                 callback_group=group)
         self.create_service(MapCommand, '/operator/maps', self.command, callback_group=group)
 
     def receive_state(self, value):
         self.state, self.state_at = value, time.monotonic()
+
+    def receive_amcl(self, message):
+        if message.header.frame_id == 'map':
+            stamp = message.header.stamp
+            self.amcl_estimate = (stamp.sec * 1_000_000_000 + stamp.nanosec, time.monotonic())
+
+    def wait_initial_pose(self, session, stamp, sent):
+        deadline = sent + 8.
+        while time.monotonic() < deadline:
+            observed, received = self.amcl_estimate
+            state = self.state
+            if (state and state.session_id == session and state.localization_initialized
+                    and state.stopped and not state.base_active and time.monotonic()-self.state_at < .6
+                    and observed >= stamp and received >= sent):
+                return
+            time.sleep(.05)
+        raise RuntimeError('초기 위치를 보냈지만 현재 지도에서 AMCL 위치 관측을 확인하지 못했습니다.')
 
     def receive_keepouts(self, message):
         if message.header.frame_id != 'map' or not message.session_id:
@@ -277,6 +299,63 @@ class MapSupport(Node):
             time.sleep(.05)
         raise RuntimeError('최신 실제 정지·구동해제 상태를 확인할 수 없습니다.')
 
+    @contextmanager
+    def map_reservation(self, request, ending_guard=False):
+        # The guard holds the operation independently of the GUI owner, which
+        # is released by emergency stop. A dead support process cannot lock it forever.
+        transaction = dict(owner_id=request.session_id, token=request.token, epoch=request.epoch,
+                           request_id=uuid.uuid4().hex)
+        def send(command):
+            self.call(self.control, Control.Request(command=command, **transaction), timeout=3.)
+        send('begin_map')
+        done = threading.Event()
+        def maintain():
+            while not done.wait(2.):
+                try:
+                    send('hold_map')
+                except RuntimeError:
+                    # The pre-commit check rejects an expired/replaced lease.
+                    continue
+        thread = threading.Thread(target=maintain, daemon=True)
+        thread.start()
+        try:
+            yield lambda: send('hold_map')
+        finally:
+            done.set()
+            thread.join()
+            # The old server and its reservation have both gone. Never send
+            # its credentials to the replacement server.
+            if not ending_guard or 'navigation' in self.processes.items:
+                try:
+                    send('end_map')
+                except RuntimeError as exc:
+                    self.get_logger().warning('지도 작업 예약 해제 응답 대기: ' + str(exc))
+
+    def save_reserved(self, path, response, confirm_reservation):
+        from omslam_mapping.bundle_transaction import staged_map
+        session, revision, polygons = self.keepout_snapshot()
+        suffixes = ('.yaml', '.pgm', '.metadata.json', '.keepout.json')
+        if self.loaded_map_path is None:
+            suffixes += ('.posegraph', '.data')
+        with staged_map(path, suffixes) as stage:
+            if self.loaded_map_path is not None:
+                copy_localization_map(self.loaded_map_path, stage, reserved=True)
+            else:
+                process = self.processes.start('map_save', ['ros2', 'run', 'omslam_mapping', 'save_map',
+                    '--output', str(stage), '--workspace', str(self.root), '--timeout', '20'])
+                log = Path(self.processes.items['map_save'][1].name)
+                try:
+                    if process.wait(timeout=65):
+                        raise RuntimeError(log.read_text()[-1800:])
+                finally:
+                    self.processes.stop('map_save')
+            save_keepout_sidecar(str(stage) + '.yaml', polygons)
+            if self.keepout_snapshot()[:2] != (session, revision):
+                raise RuntimeError('저장 중 지도 또는 금지 구역이 변경됐습니다. 다시 저장하세요.')
+            confirm_reservation()
+        response.paths = [str(path) + '.yaml', str(path) + '.keepout.json']
+        response.message = f'지도·진입 금지 구역 저장 완료: {os.uname().nodename}:{path}'
+
     def start_navigation(self, mode='slam', path='', pose=None):
         launch = 'slam_navigation.launch.py' if mode == 'slam' else 'navigation.launch.py'
         argv = ['ros2', 'launch', 'omslam_navigation', launch, 'start_sim:=false',
@@ -311,53 +390,36 @@ class MapSupport(Node):
                 path = validate_map_bundle(req.path)
             if req.operation == 'save':
                 path = map_prefix(self.root, req.path)
-            self.stop_and_confirm()
-            if req.operation == 'save':
-                keepout_session, keepout_revision, polygons = self.keepout_snapshot()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                pending = write_new_file(str(path) + '.keepout.pending',
-                    b'Incomplete map/keepout save; do not load this bundle.\n')
-                if self.loaded_map_path is not None:
-                    copy_localization_map(self.loaded_map_path, path, reserved=True)
+            replacing = req.operation in ('slam', 'localize')
+            with self.map_reservation(req, ending_guard=replacing) as confirm_reservation:
+                self.stop_and_confirm()
+                if req.operation == 'save':
+                    self.save_reserved(path, res, confirm_reservation)
+                elif req.operation == 'initialpose':
+                    if not self.count_subscribers('/initialpose'):
+                        raise RuntimeError('AMCL 초기 위치 수신 노드가 없습니다.')
+                    msg = PoseWithCovarianceStamped()
+                    msg.header.frame_id = 'map'
+                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.pose.pose.position.x, msg.pose.pose.position.y = req.x, req.y
+                    msg.pose.pose.orientation.z = math.sin(req.yaw / 2)
+                    msg.pose.pose.orientation.w = math.cos(req.yaw / 2)
+                    msg.pose.covariance[0] = msg.pose.covariance[7] = .25
+                    msg.pose.covariance[35] = .0685
+                    confirm_reservation()
+                    session = self.state.session_id
+                    sent = time.monotonic()
+                    self.pose_pub.publish(msg)
+                    self.wait_initial_pose(session, msg.header.stamp.sec*1_000_000_000 + msg.header.stamp.nanosec, sent)
+                    confirm_reservation()
+                    res.message = '현재 지도의 AMCL 초기 위치 관측을 확인했습니다.'
                 else:
-                    # map_bundle runs a separate executor and retains provenance/no-overwrite rules.
-                    result = self.processes.start('map_save', ['ros2', 'run', 'omslam_mapping', 'save_map',
-                        '--output', str(path), '--workspace', str(self.root), '--timeout', '20'])
-                    save_log = Path(self.processes.items['map_save'][1].name)
-                    try:
-                        if result.wait(timeout=65):
-                            raise RuntimeError(save_log.read_text()[-1800:])
-                    finally:
-                        self.processes.stop('map_save')
-                latest_session, latest_revision, _ = self.keepout_snapshot()
-                if (latest_session, latest_revision) != (keepout_session, keepout_revision):
-                    raise RuntimeError('저장 중 지도 또는 금지 구역이 변경됐습니다. 지도 파일은 보존했지만 금지 구역 저장은 완료되지 않았습니다. 새 이름으로 다시 저장하세요.')
-                try:
-                    sidecar = save_keepout_sidecar(str(path) + '.yaml', polygons)
-                    pending.unlink()
-                except Exception as exc:
-                    raise RuntimeError('지도 파일은 저장됐지만 금지 구역 저장에 실패했습니다. '
-                                       '새 이름으로 다시 저장하세요: ' + str(exc)) from exc
-                res.paths = [str(path) + '.yaml', str(sidecar)]
-                res.message = f'지도·진입 금지 구역 저장 완료: {os.uname().nodename}:{path}'
-            elif req.operation == 'initialpose':
-                if not self.count_subscribers('/initialpose'):
-                    raise RuntimeError('AMCL 초기 위치 수신 노드가 없습니다.')
-                msg = PoseWithCovarianceStamped()
-                msg.header.frame_id = 'map'
-                msg.header.stamp = self.get_clock().now().to_msg()
-                msg.pose.pose.position.x, msg.pose.pose.position.y = req.x, req.y
-                msg.pose.pose.orientation.z = math.sin(req.yaw / 2)
-                msg.pose.pose.orientation.w = math.cos(req.yaw / 2)
-                msg.pose.covariance[0] = msg.pose.covariance[7] = .25
-                msg.pose.covariance[35] = .0685
-                self.pose_pub.publish(msg)
-                res.message = '초기 위치를 전달했습니다. 위치추정 준비 상태를 확인하세요.'
-            else:
-                previous_session = self.state.session_id
-                transition_stamp = self.get_clock().now().nanoseconds
-                self.processes.stop('navigation')
-                self.state = None
+                    previous_session = self.state.session_id
+                    transition_stamp = self.get_clock().now().nanoseconds
+                    confirm_reservation()
+                    self.processes.stop('navigation')
+                    self.state = None
+            if replacing:
                 with self.keepout_lock:
                     self.keepout_sessions.clear()
                 # Drop the previous publisher's queued map before starting the
@@ -494,8 +556,7 @@ def main(argv=None):
                 raise RuntimeError('같은 domain에 실행 중인 로봇이 있습니다. 관측 연결을 사용하세요.')
             processes.start('simulation', ['ros2', 'launch', 'omslam_sim', 'sim.launch.py',
                 f'world:={args.world}', f'gui:={str(args.gazebo_gui).lower()}',
-                'pedestrians:=false', f'x:={-108.0 if args.world == "airport" else 0.0}',
-                'y:=0.0', 'yaw:=0.0'])
+                'pedestrians:=false'])
             node.start_navigation()
         processes.start('system_monitor', ['ros2', 'run', 'omslam_system_monitor', 'system_monitor',
                                           '--ros-args', '-p',

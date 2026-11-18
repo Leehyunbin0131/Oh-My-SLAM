@@ -139,14 +139,14 @@ class OperatorGate(NavigationGate):
         self.allowed_goals.clear()
         self.forget_owner()
 
-    def sample_stop(self, key, stamp, vx, wz, valid, wall):
+    def sample_stop(self, key, stamp, linear_speed, wz, valid, wall):
         previous = self.stop_samples.get(key)
         if previous and stamp <= previous[0]:
             if not valid:
                 self.stopped_since = None
                 self.stop_samples[key] = (previous[0], previous[1], False)
             return
-        stationary = valid and math.isfinite(vx) and math.isfinite(wz) and abs(vx) <= 0.01 and abs(wz) <= 0.02
+        stationary = valid and abs(linear_speed) <= 0.01 and abs(wz) <= 0.02
         self.stop_samples[key] = (stamp, wall, stationary)
         if not stationary:
             self.stopped_since = None
@@ -257,7 +257,7 @@ class OperatorGate(NavigationGate):
         self.cancel_required = bool(self.active_goals or self.allowed_goals)
         self.reason = 'operator goal cancellation requested; output stopped'
 
-    def goals(self, statuses, ros_ns):
+    def goals(self, statuses, ros_ns, wall=None):
         unauthorized = {uid for uid, _, status in statuses if status in (1, 2, 3)
                         and uid not in self.allowed_goals}
         if unauthorized and self.armed:
@@ -267,7 +267,7 @@ class OperatorGate(NavigationGate):
         # A delayed EXECUTING status after a local cancel cannot reopen motion.
         effective = [(uid, stamp, 3 if uid in self.canceled_goals and status in (1, 2, 3) else status)
                      for uid, stamp, status in statuses]
-        super().goals(effective, ros_ns)
+        super().goals(effective, ros_ns, wall)
         for uid, _, status in statuses:
             if status in (4, 5, 6):
                 self.allowed_goals.discard(uid)

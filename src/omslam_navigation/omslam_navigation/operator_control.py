@@ -8,6 +8,7 @@ import uuid
 
 from action_msgs.msg import GoalStatus
 from lifecycle_msgs.msg import State, Transition
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav2_msgs.msg import SpeedLimit
 from omslam_operator_msgs.action import OperatorNavigate
@@ -31,10 +32,16 @@ def values(message):
 
 
 class OperatorControl:
+    MAP_LEASE_SECONDS = 15.
+
     def __init__(self, node):
         self.node, self.core = node, node.core
         self.session_id = str(uuid.uuid4())
         self.pending = None
+        self.map_reservation = None
+        self.session_start_ns = node.now_ns()
+        self.localization_initialized = False
+        self.pending_pose = None
         self.activating = False
         self.last_report = 0.0
         self.completed = OrderedDict()
@@ -46,6 +53,9 @@ class OperatorControl:
         transient = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.state_pub = node.create_publisher(OperatorState, '/operator/state', transient)
+        if node.p['localization_mode'] == 'amcl':
+            self.pose_sub = node.create_subscription(PoseWithCovarianceStamped, '/amcl_pose',
+                                                      self.amcl_pose, 1)
         self.speed_pub = node.create_publisher(SpeedLimit, '/speed_limit', 1)
         self.control_service = node.create_service(Control, '/operator/control', self.control,
                                                     callback_group=self.group)
@@ -62,6 +72,54 @@ class OperatorControl:
 
     def authorized(self, token, epoch):
         return self.core.authorized(token, epoch, self.node.now_ns(), time.monotonic())
+
+    def amcl_pose(self, message):
+        now = self.node.now_ns()
+        stamp = ns(message.header.stamp)
+        pose = message.pose.pose
+        q = pose.orientation
+        if (message.header.frame_id == 'map' and stamp > 0 and stamp >= self.session_start_ns
+                and -300_000_000 <= now - stamp < 1_000_000_000
+                and all(math.isfinite(x) for x in (pose.position.x, pose.position.y))
+                and abs(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w - 1.) < .02):
+            self.pending_pose = (stamp, time.monotonic())
+            self.confirm_localization(now)
+
+    def confirm_localization(self, now):
+        if self.pending_pose is None:
+            return
+        stamp, received = self.pending_pose
+        if time.monotonic() - received >= 1.:
+            self.pending_pose = None
+        elif 0 <= now - stamp < 1_000_000_000:
+            self.localization_initialized = True
+            self.pending_pose = None
+
+    def map_reserved(self):
+        if self.map_reservation and time.monotonic() >= self.map_reservation[1]:
+            self.map_reservation = None
+        return self.map_reservation is not None
+
+    def map_command(self, request, response):
+        key = (request.owner_id, request.token, request.epoch, request.request_id)
+        reserved = self.map_reserved()
+        matches = reserved and key == self.map_reservation[0]
+        if request.command == 'begin_map':
+            if not matches and (reserved or self.pending or not self.authorized(request.token, request.epoch)
+                                or request.owner_id != self.core.owner_id):
+                response.message = '지도 작업을 예약할 수 없습니다. 구동 상태와 제어권을 확인하세요.'
+                return response
+            if not matches:
+                self.core.disable()
+                self.node.publish_zero()
+        elif not matches:
+            response.message = '지도 작업 예약이 만료되었거나 세션이 변경됐습니다.'
+            return response
+        self.map_reservation = (None if request.command == 'end_map' else
+                                (key, time.monotonic() + self.MAP_LEASE_SECONDS))
+        response.success = True
+        response.message = '지도 작업 예약 해제' if request.command == 'end_map' else '지도 작업 예약 확인'
+        return response
 
     def heartbeat(self, message):
         self.core.heartbeat(message.token, message.epoch, message.sequence, ns(message.header.stamp),
@@ -97,9 +155,17 @@ class OperatorControl:
             return self.fill_response(response, self.response_values(good, 'owner valid' if good else 'owner expired or invalid'))
         if not request.request_id or len(request.request_id) > 128:
             return self.fill_response(response, self.response_values(False, 'a bounded request_id is required'))
+        if request.command in ('begin_map', 'hold_map', 'end_map'):
+            return self.map_command(request, response)
+        if self.map_reserved() or (request.command == 'acquire' and self.pending):
+            return self.fill_response(response, self.response_values(False, 'a stop, mode change or map operation is pending'))
         key = (request.command, request.owner_id, request.token, request.epoch, request.request_id)
         if key in self.completed:
-            return self.fill_response(response, self.completed[key])
+            previous = self.completed[key]
+            if (request.command in ('acquire', 'set_mode') and previous[0]
+                    and not self.authorized(previous[2], previous[3])):
+                return self.fill_response(response, self.response_values(False, 'previous ownership has ended'))
+            return self.fill_response(response, previous)
         if key in self.inflight:
             return self.fill_response(response, await self.inflight[key])
         future = Future()
@@ -194,6 +260,7 @@ class OperatorControl:
                       and abs(q.x) < 1e-6 and abs(q.y) < 1e-6 and abs(q.z*q.z + q.w*q.w - 1) < 0.02)
         if (not valid_pose or not self.authorized(request.token, request.epoch) or
                 self.core.mode != 'AUTO' or not self.core.armed or self.pending or
+                (self.node.p['localization_mode'] == 'amcl' and not self.localization_initialized) or
                 self.proxy_reserved or self.core.active_goals or self.core.allowed_goals or
                 self.node.readiness(mode='AUTO') or not self.nav_client.server_is_ready() or
                 not self.core.stopped(self.node.now_ns(), time.monotonic())):
@@ -331,18 +398,22 @@ class OperatorControl:
         if wall - self.last_report < 0.10:
             return
         self.last_report = wall
+        self.confirm_localization(ros_ns)
         manual_missing = self.node.readiness(mode='MANUAL')
         auto_missing = self.node.readiness(mode='AUTO')
         message = OperatorState()
         message.header.stamp = self.node.get_clock().now().to_msg()
         message.header.frame_id = self.node.p['base_frame']
         message.backend, message.session_id, message.operator_enabled = 'simulation', self.session_id, True
+        message.localization_mode = self.node.p['localization_mode']
+        message.localization_initialized = message.localization_mode == 'slam' or self.localization_initialized
         message.capabilities = ['observe', 'manual', 'navigate', 'speed_limit', 'maps']
         message.mode = self.core.mode
         message.phase = ('TRANSITION' if self.pending else 'BLOCKED' if self.core.state == 'FAULT_LATCHED' or self.node.missing
                          else 'READY' if self.core.mode == 'DISABLED' else 'ACTIVE')
         message.owner_id, message.epoch = self.core.owner_id, self.core.epoch_ns
         message.ready, message.manual_ready, message.auto_ready = not self.node.missing, not manual_missing, not auto_missing
+        message.auto_ready = message.auto_ready and message.localization_initialized
         message.missing, message.reason = list(self.node.missing), self.core.reason
         message.stopped = self.core.stopped(ros_ns, wall)
         message.base_active = self.node.states['sim_base'][0] == State.PRIMARY_STATE_ACTIVE
@@ -353,6 +424,7 @@ class OperatorControl:
         message.max_wheel_rpm = self.core.geometry.max_rpm
         message.wheel_rpm_limit = self.core.wheel_rpm_limit
         message.goal_id, message.navigation_state = self.core.goal_id or '', self.core.state
+        message.goal_stamp_ns = self.core.goal_stamp
         message.heartbeat_age = wall - self.core.owner_at if self.core.owner_at is not None else -1.0
         message.command_age = wall - self.core.last_source_at if self.core.last_source_at is not None else -1.0
         self.state_pub.publish(message)

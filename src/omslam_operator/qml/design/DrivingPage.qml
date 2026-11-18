@@ -46,7 +46,8 @@ Item {
     onRoutePointsChanged: syncGoalRows()
     Component.onCompleted: syncGoalRows()
     function releaseManual() { if(directPad)directPad.release() }
-    function stopInput() { releaseManual(); addingGoal=false; addingKeepout=false; initialPosePending=false; editingGoal=-1; map.cancelGesture() }
+    function cancelMapEdit() { addingGoal=false; addingKeepout=false; initialPosePending=false; editingGoal=-1; map.cancelGesture() }
+    function stopInput() { releaseManual(); cancelMapEdit() }
     function beginAdd() {
         var activate=!addingGoal; stopInput(); addingGoal=activate
         if (activate) { map.followRobot(false); forceActiveFocus() }
@@ -98,7 +99,7 @@ Item {
         mapPathDialog.open(); mapPath.forceActiveFocus()
     }
     onGoalCountChanged: { if (editingGoal>=goalCount) editingGoal=-1; if (selectedGoal>=goalCount) selectedGoal=goalCount-1 }
-    onEditableChanged: if (!editable) stopInput()
+    onEditableChanged: if (!editable) cancelMapEdit()
     onKeepoutEditableChanged: if (!keepoutEditable) { addingKeepout=false; map.cancelGesture() }
     onVisibleChanged: if (!visible) stopInput()
     Keys.onEscapePressed: { stopInput(); cameraKind=""; mapTools.close(); keepoutTools.close(); mapPathDialog.close() }
@@ -181,14 +182,14 @@ Item {
             Rectangle {Layout.fillWidth:true;height:1;color:"#35485E"}
             RowLayout {Layout.fillWidth:true;spacing:8
                 Text {text:"RPM";color:"#A6B9D1";font.pixelSize:11}
-                Slider {id:speed;objectName:"speedSlider";from:Number(page.ui.minRpm||1);to:Math.max(from,Number(page.ui.maxRpm||100));value:Number(page.ui.rpmLimit||from);stepSize:Number(page.ui.rpmStep||1);snapMode:Slider.SnapAlways;onMoved:operatorModel.setRpmLimit(value);enabled:!page.ui.readOnly&&Boolean(page.ui.controlFresh);Layout.fillWidth:true;implicitHeight:24
+                Slider {id:speed;objectName:"speedSlider";from:Number(page.ui.minRpm||1);to:Math.max(from,Number(page.ui.maxRpm||100));value:Number(page.ui.rpmLimit||from);stepSize:Number(page.ui.rpmStep||1);snapMode:Slider.SnapAlways;onMoved:operatorModel.setRpmLimit(value);enabled:!page.ui.readOnly&&!page.ui.ownerBusy&&Boolean(page.ui.controlFresh);Layout.fillWidth:true;implicitHeight:24
                     background:Rectangle {x:speed.leftPadding;y:speed.topPadding+speed.availableHeight/2-height/2;implicitHeight:3;width:speed.availableWidth;radius:2;color:"#425A74";Rectangle {width:speed.visualPosition*parent.width;height:parent.height;radius:2;color:"#6AA9FF"}}
                     handle:Rectangle {x:speed.leftPadding+speed.visualPosition*(speed.availableWidth-width);y:speed.topPadding+speed.availableHeight/2-height/2;width:13;height:13;radius:7;color:"#8EBDFF";border.color:speed.activeFocus?"#E8EEF6":"transparent"}
                     Accessible.name:"바퀴 RPM 상한"
                 }
                 Field {
                     id:rpmValue; objectName:"rpmLimitInput"; Layout.preferredWidth:65; implicitHeight:32
-                    enabled:!page.ui.readOnly&&Boolean(page.ui.controlFresh); horizontalAlignment:Text.AlignRight
+                    enabled:!page.ui.readOnly&&!page.ui.ownerBusy&&Boolean(page.ui.controlFresh); horizontalAlignment:Text.AlignRight
                     validator:DoubleValidator {bottom:Number(page.ui.minRpm||1);top:Number(page.ui.maxRpm||100);decimals:1;notation:DoubleValidator.StandardNotation}
                     Accessible.name:"바퀴 RPM 상한 직접 입력"
                     onEditingFinished: {

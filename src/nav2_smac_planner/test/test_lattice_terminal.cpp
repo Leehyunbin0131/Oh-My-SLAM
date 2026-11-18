@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -48,7 +49,10 @@ protected:
   {
     rclcpp::NodeOptions options;
     options.parameter_overrides({
-      rclcpp::Parameter("plugins", std::vector<std::string>{}),
+      rclcpp::Parameter("plugins", std::vector<std::string>{"inflation_layer"}),
+      rclcpp::Parameter("inflation_layer.plugin", "nav2_costmap_2d::InflationLayer"),
+      rclcpp::Parameter("inflation_layer.inflation_radius", 0.55),
+      rclcpp::Parameter("inflation_layer.cost_scaling_factor", 3.0),
       rclcpp::Parameter("footprint", "[[0.09,0.26],[0.09,-0.26],[-0.39,-0.26],[-0.39,0.26]]"),
       rclcpp::Parameter("footprint_padding", 0.02),
       rclcpp::Parameter("resolution", 0.05)});
@@ -61,7 +65,7 @@ protected:
     std::fill(map->getCharMap(), map->getCharMap() + 160 * 160, 0);
   }
 
-  void configure(double tolerance = 0.1, const std::string & model = "diff")
+  void configure(double tolerance = 0.1, const std::string & model = "diff", bool smooth = true)
   {
     if (planner) {
       if (active) {
@@ -76,7 +80,7 @@ protected:
     options.parameter_overrides({
       rclcpp::Parameter("test.xy_goal_tolerance", tolerance),
       rclcpp::Parameter("test.tolerance", 0.1),
-      rclcpp::Parameter("test.smooth_path", true),
+      rclcpp::Parameter("test.smooth_path", smooth),
       rclcpp::Parameter("test.allow_unknown", false),
       rclcpp::Parameter("test.max_planning_time", 2.0),
       rclcpp::Parameter("test.lattice_filepath",
@@ -218,6 +222,135 @@ TEST_F(TerminalPlanner, StartupToleranceIsReadOnly)
   EXPECT_TRUE(node->describe_parameter("test.xy_goal_tolerance").read_only);
   EXPECT_FALSE(node->set_parameter(rclcpp::Parameter("test.xy_goal_tolerance", 0.2)).successful);
   EXPECT_DOUBLE_EQ(node->get_parameter("test.xy_goal_tolerance").as_double(), 0.1);
+}
+
+TEST_F(TerminalPlanner, GeneralPathChecksAndRetainsMeasuredStart)
+{
+  const auto start = pose(0.0, 0.0, 0.20);
+  const auto goal = pose(0.8, 0.0);
+  for (bool smooth : {false, true}) {
+    configure(0.1, "diff", smooth);
+    obstacle(-0.325, -0.375, nav2_costmap_2d::LETHAL_OBSTACLE);
+    EXPECT_THROW(plan(start, goal), nav2_core::NoValidPathCouldBeFound);
+    obstacle(-0.325, -0.375, nav2_costmap_2d::FREE_SPACE);
+    const auto route = plan(start, goal);
+    ASSERT_FALSE(route.poses.empty());
+    EXPECT_EQ(route.poses.front().pose, start.pose);
+    EXPECT_EQ(route.poses.back().pose, goal.pose);
+    EXPECT_TRUE(nav2_smac_planner::isPathCollisionFree(
+      route, *costmap_ros->getCostmap(), costmap_ros->getRobotFootprint(), false));
+  }
+}
+
+TEST_F(TerminalPlanner, ReplansAroundAnUninflatedUnknownBoundary)
+{
+  auto * grid = costmap_ros->getCostmap();
+  grid->resizeMap(241, 202, 0.05, -1.01705, -1.06441);
+  for (unsigned int y = 0; y < grid->getSizeInCellsY(); ++y) {
+    for (unsigned int x = 0; x < grid->getSizeInCellsX(); ++x) {
+      double wx, wy;
+      grid->mapToWorld(x, y, wx, wy);
+      grid->setCost(x, y, wx > 3.6 && wy < -0.52 ?
+        nav2_costmap_2d::NO_INFORMATION : nav2_costmap_2d::FREE_SPACE);
+    }
+  }
+  // The straight aisle and a final in-place turn are free. A forward-curving
+  // shortcut can keep its centre in the aisle while its body enters unknown.
+  const auto start = pose(0.90732, 0.0000616, 0.012142);
+  const auto goal = pose(5.0, 0.0, M_PI_2);
+  for (bool smooth : {false, true}) {
+    configure(0.1, "diff", smooth);
+    const auto route = plan(start, goal);
+    ASSERT_FALSE(route.poses.empty());
+    EXPECT_EQ(route.poses.front().pose, start.pose);
+    EXPECT_EQ(route.poses.back().pose, goal.pose);
+    EXPECT_TRUE(nav2_smac_planner::isPathCollisionFree(
+      route, *grid, costmap_ros->getRobotFootprint(), false));
+  }
+}
+
+TEST_F(TerminalPlanner, SearchSweepMatchesIndependentFilledFootprintCheck)
+{
+  auto * grid = costmap_ros->getCostmap();
+  const auto footprint = costmap_ros->getRobotFootprint();
+  // Separate the centre-only inscribed cost from lethal/unknown cells at
+  // corners, inside the body, across a rotation, and next to the map edge.
+  const unsigned char costs[] = {253, 254, 255};
+  for (unsigned int y = 4; y < 86; y += 13) {
+    for (unsigned int x = 7; x < 99; x += 19) {
+      grid->setCost(x, y, costs[(x + y) % 3]);
+    }
+  }
+  auto parent = std::make_shared<rclcpp_lifecycle::LifecycleNode>("sweep_comparison");
+  nav2_smac_planner::GridCollisionChecker checker(costmap_ros, 72, parent);
+  checker.setFootprint(footprint, false, 100.0);
+  for (bool allow_unknown : {false, true}) {
+    checker.prepareLatticeFootprint(allow_unknown);
+    std::mt19937 engine(17);
+    std::uniform_real_distribution<float> location(0, 115), offset(-4, 4), angle(-M_PI, M_PI);
+    unsigned int blocked = 0, clear = 0;
+    for (unsigned int i = 0; i < 320; ++i) {
+      const float x = location(engine), y = location(engine), a = angle(engine);
+      const float nx = x + offset(engine), ny = y + offset(engine), b = angle(engine);
+      nav_msgs::msg::Path edge;
+      edge.poses.resize(2);
+      edge.poses[0].pose = nav2_smac_planner::getWorldCoords(x, y, grid);
+      edge.poses[0].pose.orientation = nav2_smac_planner::getWorldOrientation(a);
+      edge.poses[1].pose = nav2_smac_planner::getWorldCoords(nx, ny, grid);
+      edge.poses[1].pose.orientation = nav2_smac_planner::getWorldOrientation(b);
+      const bool expected = !nav2_smac_planner::isPathCollisionFree(edge, *grid, footprint, allow_unknown);
+      ASSERT_EQ(checker.latticeSweepCollides(x, y, a, nx, ny, b), expected) << "case " << i;
+      if (expected) {++blocked;} else {++clear;}
+    }
+    EXPECT_GT(blocked, 0u);
+    EXPECT_GT(clear, 0u);
+  }
+}
+
+TEST_F(TerminalPlanner, IncomingPrimitivesHaveIndependentCollisionAndCost)
+{
+  configure();
+  using nav2_smac_planner::NodeLattice;
+  // Trigger initialization of the actual diff motion table for this costmap.
+  ASSERT_FALSE(plan(pose(0, 0), pose(0.8, 0)).poses.empty());
+  nav2_smac_planner::GridCollisionChecker checker(costmap_ros, 72, node);
+  checker.setFootprint({}, true, 0.0);
+  auto & straight = NodeLattice::motion_table.motion_primitives.at(0).at(3);
+  auto & turning = NodeLattice::motion_table.motion_primitives.at(1).at(2);
+  ASSERT_EQ(straight.trajectory_id, 3u);
+  ASSERT_EQ(turning.trajectory_id, 9u);
+  for (auto cost : {nav2_costmap_2d::LETHAL_OBSTACLE, static_cast<unsigned char>(100)}) {
+    costmap_ros->getCostmap()->setCost(54, 58, cost);
+    for (bool turn_first : {false, true}) {
+      NodeLattice destination(0);
+      destination.setPose({60.5f, 60.5f, 0.0f});
+      for (bool turn : {turn_first, !turn_first}) {
+        EXPECT_EQ(destination.isNodeValid(false, &checker, turn ? &turning : &straight),
+          !turn || cost != nav2_costmap_2d::LETHAL_OBSTACLE);
+        EXPECT_EQ(destination.getCost(), turn ? cost : 0);
+      }
+    }
+  }
+}
+
+TEST_F(TerminalPlanner, AllHeadingDistancesReflectAcrossTheGoalAxis)
+{
+  configure();
+  ASSERT_FALSE(plan(pose(0, 0), pose(0.8, 0)).poses.empty());
+  using nav2_smac_planner::NodeHybrid;
+  using nav2_smac_planner::NodeLattice;
+  unsigned int size = 160, bins = NodeLattice::motion_table.num_angle_quantization;
+  nav2_smac_planner::SearchInfo info;
+  NodeHybrid::initMotionModel(nav2_smac_planner::MotionModel::DUBIN, size, size, bins, info);
+  NodeHybrid::precomputeDistanceHeuristic(31, nav2_smac_planner::MotionModel::DUBIN, bins, info);
+  const NodeLattice::Coordinates goal(60, 60, 0);
+  for (unsigned int bin = 0; bin < bins; ++bin) {
+    const NodeLattice::Coordinates left(50, 62, bin), right(50, 58, (bins - bin) % bins);
+    EXPECT_FLOAT_EQ(NodeLattice::getDistanceHeuristic(left, goal, 0),
+      NodeLattice::getDistanceHeuristic(right, goal, 0));
+    EXPECT_FLOAT_EQ(NodeHybrid::getDistanceHeuristic(left, goal, 0),
+      NodeHybrid::getDistanceHeuristic(right, goal, 0));
+  }
 }
 
 TEST_F(TerminalPlanner, RejectsInvalidTolerance)

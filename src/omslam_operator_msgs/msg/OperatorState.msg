@@ -1,6 +1,9 @@
 std_msgs/Header header
 string backend
 string session_id
+string localization_mode
+# AMCL has published a valid estimate in this guard session.
+bool localization_initialized
 bool operator_enabled
 string[] capabilities
 string mode
@@ -24,6 +27,7 @@ float64 speed_percent
 float64 max_wheel_rpm
 float64 wheel_rpm_limit
 string goal_id
+uint64 goal_stamp_ns
 string navigation_state
 float64 heartbeat_age
 float64 command_age

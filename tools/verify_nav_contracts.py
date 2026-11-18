@@ -11,12 +11,14 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import traceback
 import xml.etree.ElementTree as ET
 import yaml
 import numpy as np
 from scipy.spatial.transform import Rotation
+from build_navigation import DEFAULT_BUILD, DEFAULT_VALIDATION, verified_build, write_manifest
 from generate_p4_course import generate
 from p4_geometry import polygon, rectangle, intersects
 
@@ -24,12 +26,6 @@ WORKSPACE=Path(__file__).resolve().parents[1]
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def package_source_hashes():
-    return {str(p.relative_to(WORKSPACE)):digest(p) for p in sorted((WORKSPACE/'src').rglob('*'))
-            if p.is_file() and not any(x in p.parts for x in ('__pycache__','.pytest_cache'))
-            and p.suffix in ('.py','.yaml','.json','.xml','.cpp','.hpp','.h','.sdf','.txt','.launch')}
 
 
 def collision_envelope(urdf):
@@ -68,7 +64,7 @@ def collision_envelope(urdf):
             'sampling_margin_m':0.00015,'collision_shapes':len(shapes)}
 
 
-def run(output):
+def run(output, build=DEFAULT_BUILD, integrated=False, domain=None):
     from ament_index_python.packages import get_package_prefix,get_package_share_directory
     from omslam_description.model import simulation_urdf
     from omslam_navigation.launch_support import load_configuration
@@ -84,12 +80,9 @@ def run(output):
         packages=['omslam_navigation','omslam_navigation_contracts','nav2_smac_planner','omm_perception','omm_perception_msgs','omm_costmap_layers','omslam_sim']
         prefixes={p:str(Path(get_package_prefix(p)).resolve()) for p in packages}
         check('P0.1.prefixes',all(Path(v)==WORKSPACE/'install'/k for k,v in prefixes.items()),prefixes=prefixes)
-        build=WORKSPACE/'reports/sim-navigation/latest_build.json'
-        if not build.exists(): raise FileNotFoundError('No successful P4 build manifest; build before verification')
-        manifest=json.loads(build.read_text())
-        current=package_source_hashes()
-        check('P0.1.current_build',manifest.get('exit_code')==0 and manifest.get('source_sha256')==current,
-              build_manifest=str(build),source_files=len(current))
+        manifest = verified_build(build)
+        result.update(source_sha256=manifest['source_sha256'], build_manifest_sha256=digest(build))
+        check('P0.1.current_build', True, build_manifest=str(build), source_files=len(manifest['source_sha256']))
         nav=Path(get_package_share_directory('omslam_navigation')); sim=Path(get_package_share_directory('omslam_sim'))
         lattice=nav/'config/lattice/diff_5cm_16h_r0p5.json'
         installed=json.loads(lattice.read_text()); metadata=installed['lattice_metadata']
@@ -120,20 +113,45 @@ def run(output):
               parameters=planner_parameters,sha256=digest(parameter_file))
         command=['ros2','run','omslam_navigation_contracts','plugin_boundary_probe',str(lattice),
                  '--ros-args','--params-file',str(parameter_file)]
-        envvars=dict(os.environ,ROS_DOMAIN_ID='177',ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST')
+        envvars=dict(os.environ,ROS_DOMAIN_ID=str(domain if domain is not None else 177),ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST')
         completed=subprocess.run(command,env=envvars,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=45)
         (directory/'plugin_boundary.log').write_text(completed.stdout)
         lines=[line.split('P4_BOUNDARY_RESULT ',1)[1] for line in completed.stdout.splitlines() if 'P4_BOUNDARY_RESULT ' in line]
         observed=json.loads(lines[-1]) if lines else {}
         check('P0.7.actual_plugins',completed.returncode==0 and len(observed)==10 and all(observed.values()),
               command=command,exit_code=completed.returncode,observed=observed)
+        if integrated:
+            destination = directory / 'command-chain'
+            chain = subprocess.run([sys.executable, str(WORKSPACE/'tools/probe_p4_command_chain.py'),
+                                    '--output', str(destination), '--domain', str(domain if domain is not None else 190)], cwd=WORKSPACE)
+            probe = json.loads((destination/'results.json').read_text())
+            check('command_chain', chain.returncode == 0 and probe['status'] == 'PASS',
+                  result_file=str(destination/'results.json'))
+            result['command_chain'] = result['checks']['command_chain']
+            junit = directory/'map-correction.xml'
+            gate = subprocess.run([sys.executable, '-m', 'pytest', '-q', '--junitxml', str(junit),
+                    str(WORKSPACE/'src/omslam_navigation/test/test_navigation_guard.py')+'::test_map_correction_gate'],
+                    cwd=WORKSPACE)
+            cases = ET.parse(junit).findall('.//testcase')
+            executed = len(cases) == 1 and cases[0].get('name') == 'test_map_correction_gate' and not any(
+                cases[0].find(kind) is not None for kind in ('skipped', 'failure', 'error'))
+            check('map_correction_gate', gate.returncode == 0 and executed, junit=str(junit))
+            result['tests'] = {'status': 'PASS', 'map_correction_gate': True}
         result['status']='PASS'
         result['deferred_to_integrated']=['actual lifecycle/plugin/parameter readiness','live command chain and cancellation','sensor freshness and fault stop']
     except Exception as exc:
         result['status']='FAIL';result['error']={'message':str(exc),'traceback':traceback.format_exc()}
     (directory/'results.json').write_text(json.dumps(result,indent=2)+'\n')
-    print(json.dumps(result,indent=2));return 0 if result['status']=='PASS' else 1
+    if result['status']=='PASS':
+        write_manifest(DEFAULT_VALIDATION, result)
+    print(str(directory/'results.json'), result['status'], result.get('error', {}).get('message', ''));return 0 if result['status']=='PASS' else 1
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True,type=Path)
-    raise SystemExit(run(parser.parse_args().output))
+    parser.add_argument('--build-manifest', type=Path, default=DEFAULT_BUILD)
+    parser.add_argument('--integrated', action='store_true', help='Also verify the command chain and map correction gate')
+    parser.add_argument('--domain', type=int, help='Use this isolated DDS domain for the sequential ROS probes')
+    args=parser.parse_args()
+    if args.domain is not None and not 1 <= args.domain <= 232:
+        parser.error('--domain must be in 1..232')
+    raise SystemExit(run(args.output, args.build_manifest.resolve(), args.integrated, args.domain))

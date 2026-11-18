@@ -29,6 +29,7 @@ parser.add_argument('--continue-at', choices=['all', 'controls', 'focus', 'remai
 parser.add_argument('--reuse-report')
 parser.add_argument('--diagnostics-only', type=float, default=0.)
 parser.add_argument('--profile-seconds', type=float, default=0.)
+parser.add_argument('--qml-only', action='store_true', help='verify installed Qt startup and cleanup without starting the simulator')
 parser.add_argument('--saved-map')
 args = parser.parse_args()
 ROOT = Path(__file__).resolve().parents[1]
@@ -645,27 +646,25 @@ class Run:
             E.event('failure', error=str(exc)); self.model.stop(); self.timer.stop(); QTimer.singleShot(600, self.app.quit)
 
 
-build = json.loads((ROOT/'reports/operator/latest_build.json').read_text())
-changed = [p for p, h in build['source_sha256'].items() if not (ROOT/p).is_file() or hashlib.sha256((ROOT/p).read_bytes()).hexdigest() != h]
-E.check('latest_built_sources', build['exit_code'] == 0 and build['source_unchanged'] and not changed, changed=changed)
+if not args.qml_only:
+    manifest = ROOT/'reports/operator/latest_build.json'
+    build = json.loads(manifest.read_text())
+    changed = [p for p, h in build['source_sha256'].items() if not (ROOT/p).is_file() or hashlib.sha256((ROOT/p).read_bytes()).hexdigest() != h]
+    E.check('latest_built_sources', build['exit_code'] == 0 and build['source_unchanged'] and not changed, changed=changed)
+    E.report['build_manifest'] = str(manifest)
+    E.report['build_source_sha256'] = build['source_sha256']
 packages = ('omslam_operator', 'omslam_operator_msgs', 'omslam_operator_support', 'omslam_navigation', 'omslam_base', 'omslam_sim', 'omslam_system_monitor')
 prefixes = {p: get_package_prefix(p) for p in packages}
-E.check('installed_prefixes', all(Path(v).is_relative_to(ROOT/'install') for v in prefixes.values()), prefixes=prefixes)
+E.check('installed_prefixes', all(Path(v).is_relative_to(ROOT/'install') for key, v in prefixes.items()
+                                 if not (args.qml_only and key == 'omslam_operator')), prefixes=prefixes)
 installed = {}
 for module in (worker_module, live_module, app_module, visuals_module):
     source = ROOT/'src/omslam_operator/omslam_operator'/Path(module.__file__).name
     artifact = Path(module.__file__)
     installed[str(artifact)] = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    E.check('installed_'+module.__name__, artifact.is_relative_to(ROOT/'install')
+    E.check('installed_'+module.__name__, artifact.is_relative_to(prefixes['omslam_operator'])
         and installed[str(artifact)] == hashlib.sha256(source.read_bytes()).hexdigest(), source=str(source), artifact=str(artifact))
-for source in (ROOT/'src/omslam_operator/qml/design').glob('*.qml'):
-    artifact=Path(get_package_share_directory('omslam_operator'))/'qml/design'/source.name
-    installed[str(artifact)] = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    if installed[str(artifact)] != hashlib.sha256(source.read_bytes()).hexdigest(): raise AssertionError('Outdated installed '+str(artifact))
-E.report['installed_sha256'] = installed
-E.report['build_manifest'] = str(ROOT/'reports/operator/latest_build.json')
-E.report['build_source_sha256'] = build['source_sha256']
-if args.continue_at != 'all':
+if args.continue_at != 'all' and not args.qml_only:
     if not args.reuse_report: raise RuntimeError('--continue-at requires --reuse-report')
     previous_path=Path(args.reuse_report).resolve()
     previous=json.loads(previous_path.read_text())
@@ -688,19 +687,72 @@ observer_proc = subprocess.Popen([sys.executable, str(ROOT/'tools/operator_gui_o
     start_new_session=True)
 os.close(observer_write)
 E.report['observer_pid'] = observer_proc.pid
+def close_observer():
+    for action in (lambda: observer_proc.send_signal(signal.SIGINT), observer_proc.terminate, observer_proc.kill):
+        if observer_proc.poll() is not None:
+            break
+        action()
+        try:
+            observer_proc.wait(timeout=5.)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    E.report['observer_exit_code'] = observer_proc.poll()
+    os.close(observer_read)
+    observer_output.close()
+
 shared = worker_module.Shared(); worker = worker_module.RosWorker(shared, True); worker.start()
 model = ObservedModel(shared)
 qmlRegisterType(ObservedMap if args.diagnostics_only or args.profile_seconds else RobotMap, 'OhMyRobot', 1, 0, 'NativeMap')
 engine = QQmlApplicationEngine(); engine.rootContext().setContextProperty('operatorModel', model)
 engine.rootContext().setContextProperty('defaultMapDirectory', str(OUT/'map'))
 engine.addImageProvider('camera', CameraProvider(shared))
-engine.load(QUrl.fromLocalFile(str(Path(get_package_share_directory('omslam_operator'))/'qml/design/Main.qml')))
-if not engine.rootObjects():
-    shared.stop.set(); worker.join(3.); rclpy.try_shutdown()
-    observer_proc.send_signal(signal.SIGINT); observer_proc.wait(timeout=5.)
-    E.report.update(status='FAIL', error='installed QML failed to load', qt_messages=list(E.qt_messages), checks=list(E.checks))
+startup_error = ''
+try:
+    if args.qml_only:
+        ready = False
+        deadline = time.monotonic() + 8.
+        while time.monotonic() < deadline and observer_proc.poll() is None:
+            try:
+                ready = ready or bool(os.read(observer_read, 4096))
+            except BlockingIOError:
+                pass
+            if ready and shared.node is not None:
+                break
+            time.sleep(.02)
+        E.check('observer_and_worker_started', ready and shared.node is not None)
+    share = Path(get_package_share_directory('omslam_operator'))
+    entry = app_module.qml_path()
+    E.report['qml_entry'] = str(entry)
+    E.check('live_qml_entry', entry.resolve() == (share/'qml/design/Main.qml').resolve())
+    engine.load(QUrl.fromLocalFile(str(entry)))
+    if not engine.rootObjects():
+        raise RuntimeError('installed QML failed to load')
+    for source in (ROOT/'src/omslam_operator/qml/design').glob('*.qml'):
+        artifact = share/'qml/design'/source.name
+        installed[str(artifact)] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        if installed[str(artifact)] != hashlib.sha256(source.read_bytes()).hexdigest():
+            raise RuntimeError('Outdated installed '+str(artifact))
+    E.report['installed_sha256'] = installed
+    root = engine.rootObjects()[0]
+    E.check('live_native_map_and_route_controls', root.findChild(QObject, 'nativeMap') is not None
+            and root.findChild(QObject, 'moveButton') is not None)
+except Exception as exc:
+    startup_error = str(exc)
+if startup_error or args.qml_only:
+    close_session(model, shared, worker)
+    rclpy.try_shutdown()
+    close_observer()
+    cleaned = not worker.is_alive() and observer_proc.poll() is not None
+    E.report.update(status='FAIL' if startup_error or not cleaned else 'PASS', error=startup_error,
+                    scope='installed QML startup', qt_messages=list(E.qt_messages), checks=list(E.checks),
+                    worker_stopped=not worker.is_alive(), observer_stopped=observer_proc.poll() is not None)
     (OUT/'results.json').write_text(json_text(E.report, ensure_ascii=False, indent=2)+'\n')
-    raise SystemExit(1)
+    E.raw_log.close(); E.log.close()
+    import shiboken6
+    shiboken6.delete(engine)
+    shiboken6.delete(model)
+    raise SystemExit(0 if E.report['status']=='PASS' else 1)
 window = engine.rootObjects()[0]
 window.activeChanged.connect(lambda: model.setActive(window.isActive()))
 model.setActive(window.isActive())
@@ -764,12 +816,7 @@ if run.proc is not None:
     except subprocess.TimeoutExpired: E.report['cleanup_timeout'] = True
     E.report['session_exit_code'] = run.proc.poll()
     run.output.close()
-if observer_proc.poll() is None: observer_proc.send_signal(signal.SIGINT)
-try: observer_proc.wait(timeout=5.)
-except subprocess.TimeoutExpired:
-    observer_proc.terminate(); observer_proc.wait(timeout=5.)
-E.report['observer_exit_code'] = observer_proc.returncode
-os.close(observer_read); observer_output.close()
+close_observer()
 remaining = []
 for p in run.owned.values():
     try:

@@ -123,6 +123,7 @@ class ConsoleModel(QObject):
     def stop(self):
         self.clearInput();self._halt_queue('정지 요청')
         with self.s.lock:
+            self.s.cancel_unsent_goal()
             self.s.controls.clear();self.s.controls.appendleft(('stop',{}))
         self.s.event('정지·구동해제 요청')
 
@@ -170,8 +171,10 @@ class ConsoleModel(QObject):
         # the worker; a delayed send must not complete the new queue row with old data.
         with self.s.lock:
             self.s.data['goal_result']={}
+            self.s.goal_request = uuid.uuid4().hex
+            self.s.goal_phase = 'queued'
             self.s.controls.append(('navigate',{'token':self.token,'epoch':self.epoch,'stamp':stamp,
-                'x':goal['x'],'y':goal['y'],'yaw':goal['yaw']}))
+                'request_id':self.s.goal_request,'x':goal['x'],'y':goal['y'],'yaw':goal['yaw']}))
         self.result_seen=None;return True
 
     @Slot()

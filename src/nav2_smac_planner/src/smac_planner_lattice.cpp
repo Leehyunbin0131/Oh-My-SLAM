@@ -324,6 +324,7 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
     _costmap_ros->getRobotFootprint(),
     _costmap_ros->getUseRadius(),
     findCircumscribedCost(_costmap_ros));
+  _collision_checker.prepareLatticeFootprint(_allow_unknown);
   _a_star->setCollisionChecker(&_collision_checker);
 
   // Set starting point, in A* bin search coordinates
@@ -372,6 +373,10 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
   if (cancel_checker()) {
     throw nav2_core::PlannerCancelled("Planner was cancelled");
   }
+  // Keep the measured pose, including its continuous yaw, as the first point.
+  // The final footprint check then covers the connection to the lattice.
+  pose.pose = start.pose;
+  plan.poses.push_back(pose);
 
   // The search tolerance is a heuristic fallback, not a Euclidean arrival
   // window. Once the controller can finish by braking and rotating in place,
@@ -382,8 +387,6 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
     (std::hypot(goal.pose.position.x - start.pose.position.x,
     goal.pose.position.y - start.pose.position.y) <= _xy_goal_tolerance || same_cell))
   {
-    pose.pose = start.pose;
-    plan.poses.push_back(pose);
     pose.pose.orientation = goal.pose.orientation;
     plan.poses.push_back(pose);
     // Keep the requested endpoint: replacing it with the current robot pose
@@ -408,9 +411,10 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
 
   // Corner case of start and goal being on the same cell
   if (same_cell) {
-    pose.pose = start.pose;
-    pose.pose.orientation = goal.pose.orientation;
-    plan.poses.push_back(pose);
+    if (pose.pose.orientation != goal.pose.orientation) {
+      pose.pose.orientation = goal.pose.orientation;
+      plan.poses.push_back(pose);
+    }
     if (!isPathCollisionFree(
         plan, *_costmap, _costmap_ros->getRobotFootprint(), _allow_unknown))
     {
@@ -467,14 +471,15 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
   }
 
   // Convert to world coordinates
-  plan.poses.reserve(path.size());
-  geometry_msgs::msg::PoseStamped last_pose = pose;
+  plan.poses.reserve(path.size() + 2);
   for (int i = path.size() - 1; i >= 0; --i) {
     pose.pose = getWorldCoords(path[i].x, path[i].y, _costmap);
     pose.pose.orientation = getWorldOrientation(path[i].theta);
-    if (fabs(pose.pose.position.x - last_pose.pose.position.x) < 1e-4 &&
-      fabs(pose.pose.position.y - last_pose.pose.position.y) < 1e-4 &&
-      fabs(tf2::getYaw(pose.pose.orientation) - tf2::getYaw(last_pose.pose.orientation)) < 1e-4)
+    const auto & previous = plan.poses.back().pose;
+    if (fabs(pose.pose.position.x - previous.position.x) < 1e-4 &&
+      fabs(pose.pose.position.y - previous.position.y) < 1e-4 &&
+      fabs(angles::shortest_angular_distance(
+        tf2::getYaw(previous.orientation), tf2::getYaw(pose.pose.orientation))) < 1e-4)
     {
       RCLCPP_DEBUG(
         _logger,
@@ -482,7 +487,6 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
         "Make sure your minimum control set does not contain duplicate values!");
       continue;
     }
-    last_pose = pose;
     plan.poses.push_back(pose);
   }
 
@@ -566,6 +570,7 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
       plan.poses.pop_back();
     }
     _smoother->smooth(plan, _costmap, time_remaining);
+    plan.poses.front().pose = start.pose;
     append_exact_goal();
   }
   if (!validateOrRestorePath(

@@ -26,6 +26,8 @@ from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.time import Time
 from rcl_interfaces.srv import GetParameters, ListParameters
+from lifecycle_msgs.msg import State
+from lifecycle_msgs.srv import GetState
 from rosidl_runtime_py.convert import message_to_ordereddict
 from action_msgs.msg import GoalStatusArray
 from geometry_msgs.msg import TwistStamped
@@ -43,6 +45,19 @@ SCHEMA_VERSION = 1
 MAX_TOTAL_BYTES = 2 * 1024 ** 3
 MAX_QUEUE_BYTES = 16 * 1024 ** 2
 MAX_GRID_CELLS = 16 * 1024 ** 2
+# These plugins and IDs are the runtime contract validated by the navigation launch.
+REQUIRED_PARAMETERS = {
+    'planner_server': {'GridBased.plugin', 'GridBased.xy_goal_tolerance', 'GridBased.tolerance',
+                       'GridBased.smooth_path', 'GridBased.lattice_filepath'},
+    'controller_server': {'FollowPath.plugin', 'FollowPath.critics', 'FollowPath.max_vel_x',
+                          'FollowPath.xy_goal_tolerance', 'FollowPath.trans_stopped_velocity',
+                          'goal_checker.plugin', 'goal_checker.xy_goal_tolerance',
+                          'goal_checker.yaw_goal_tolerance', 'goal_checker.trans_stopped_velocity',
+                          'goal_checker.rot_stopped_velocity', 'goal_checker.stateful'},
+    'bt_navigator': {'navigators', 'default_nav_to_pose_bt_xml'},
+    'global_costmap/global_costmap': {'plugins', 'resolution', 'global_frame'},
+    'local_costmap/local_costmap': {'plugins', 'resolution', 'global_frame'},
+}
 
 
 def stamp_ns(stamp):
@@ -280,6 +295,9 @@ class PathDebugNode(Node):
         # A console-owned simulator may still be starting when recording begins.
         self.parameter_deadline = time.monotonic() + 120.
         self.parameters_completed = set()
+        self.parameters_failed = {}
+        self.parameter_errors = {}
+        self.parameter_session = ''
         self.tf = Buffer(cache_time=Duration(seconds=10.), node=self)
         self.tf_listener = TransformListener(self.tf, self, spin_thread=False)
         transient = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -295,7 +313,7 @@ class PathDebugNode(Node):
             self.subscribe(RosPath, topic, self.path, latest)
         for topic in ('/odom', '/wheel/odometry'):
             self.subscribe(Odometry, topic, self.message, latest)
-        for topic in ('/cmd_vel/requested', '/cmd_vel/smoothed', '/cmd_vel/monitored', '/cmd_vel'):
+        for topic in ('/cmd_vel/nav', '/cmd_vel/requested', '/cmd_vel/smoothed', '/cmd_vel/monitored', '/cmd_vel'):
             self.subscribe(TwistStamped, topic, self.message, latest)
         self.subscribe(OperatorState, '/operator/state', self.operator, transient)
         self.subscribe(KeepoutZones, '/operator/keepouts', self.message, transient)
@@ -310,10 +328,10 @@ class PathDebugNode(Node):
             self.subscribe(action.Impl.FeedbackMessage, topic + '/_action/feedback', self.message, latest)
             self.subscribe(GoalStatusArray, topic + '/_action/status', self.message, transient)
         self.parameter_clients = {}
-        for target in ('planner_server', 'controller_server', 'bt_navigator',
-                       'global_costmap/global_costmap', 'local_costmap/local_costmap'):
+        for target in REQUIRED_PARAMETERS:
             name = self.topic('/' + target)
             self.parameter_clients[target] = (
+                self.create_client(GetState, name + '/get_state'),
                 self.create_client(ListParameters, name + '/list_parameters'),
                 self.create_client(GetParameters, name + '/get_parameters'))
         steady = rclpy.clock.Clock(clock_type=rclpy.clock.ClockType.STEADY_TIME)
@@ -350,6 +368,15 @@ class PathDebugNode(Node):
         self.record('message', topic, plain(message))
 
     def operator(self, topic, message):
+        if message.session_id and message.session_id != self.parameter_session:
+            for stage, future, started, names in self.parameter_jobs.values():
+                future.cancel()
+            self.parameter_jobs.clear()
+            self.parameters_completed.clear()
+            self.parameters_failed.clear()
+            self.parameter_errors.clear()
+            self.parameter_deadline = time.monotonic() + 120.
+            self.parameter_session = message.session_id
         self.latest_state = plain(message)
         self.message(topic, message)
 
@@ -424,34 +451,56 @@ class PathDebugNode(Node):
 
     def housekeeping(self):
         self.publish_status()
-        for target, (listing, getting) in self.parameter_clients.items():
-            if target in self.parameters_completed:
-                continue
-            if time.monotonic() > self.parameter_deadline:
-                self.record('parameters_unavailable', '', {'node': self.topic('/' + target),
-                            'reason': 'read-only parameter query timed out after 120 s'})
-                self.parameters_completed.add(target)
-                continue
-            job = self.parameter_jobs.get(target)
+        for target in self.parameter_clients:
+            if target not in self.parameters_completed and target not in self.parameters_failed:
+                self.snapshot_parameters(target)
+
+    def snapshot_parameters(self, target):
+        now = time.monotonic()
+        node = self.topic('/' + target)
+        job = self.parameter_jobs.get(target)
+        if now >= self.parameter_deadline:
+            if job:
+                job[1].cancel()
+                del self.parameter_jobs[target]
+            reason = self.parameter_errors.get(target, 'lifecycle or parameter services not ready')
+            self.parameters_failed[target] = reason
+            self.record('parameters_unavailable', '', {'node': node, 'session_id': self.parameter_session,
+                                                       'reason': reason})
+            return
+        lifecycle, listing, getting = self.parameter_clients[target]
+        try:
             if job is None:
-                if listing.service_is_ready() and getting.service_is_ready():
-                    self.parameter_jobs[target] = ('list', listing.call_async(ListParameters.Request(depth=0)))
-                continue
-            stage, future, *extra = job
+                if all(client.service_is_ready() for client in (lifecycle, listing, getting)):
+                    self.parameter_jobs[target] = ('state', lifecycle.call_async(GetState.Request()), now, [])
+                return
+            stage, future, started, names = job
             if not future.done():
-                continue
-            try:
-                if stage == 'list':
-                    names = future.result().result.names
-                    self.parameter_jobs[target] = ('get', getting.call_async(GetParameters.Request(names=names)), names)
-                else:
-                    values = [plain(value) for value in future.result().values]
-                    self.record('parameters', '', {'node': self.topic('/' + target),
-                                'values': dict(zip(extra[0], values))})
+                if now - started < 5.:
+                    return
+                future.cancel()
+                raise TimeoutError(stage + ' service response timed out')
+            response = future.result()
+            del self.parameter_jobs[target]
+            if stage == 'state':
+                if response.current_state.id not in (State.PRIMARY_STATE_INACTIVE, State.PRIMARY_STATE_ACTIVE):
+                    raise ValueError('node is not configured: ' + response.current_state.label)
+                self.parameter_jobs[target] = ('list', listing.call_async(ListParameters.Request(depth=0)), now, [])
+            elif stage == 'list':
+                names = list(response.result.names)
+                missing = REQUIRED_PARAMETERS[target].difference(names)
+                if missing:
+                    raise ValueError('waiting for configured parameters: ' + ', '.join(sorted(missing)))
+                self.parameter_jobs[target] = ('get', getting.call_async(GetParameters.Request(names=names)), now, names)
+            else:
+                values = {name: plain(value) for name, value in zip(names, response.values) if value.type}
+                if not REQUIRED_PARAMETERS[target].issubset(values):
+                    raise ValueError('required runtime values are not set')
+                if self.record('parameters', '', {'node': node, 'session_id': self.parameter_session, 'values': values}):
                     self.parameters_completed.add(target)
-            except Exception as exc:
-                self.record('parameters_unavailable', '', {'node': self.topic('/' + target), 'reason': str(exc)})
-                self.parameters_completed.add(target)
+        except Exception as exc:
+            self.parameter_jobs.pop(target, None)
+            self.parameter_errors[target] = str(exc)
 
     def publish_status(self, stopped=False):
         self.status_pub.publish(String(data=json.dumps(self.writer.status(stopped))))
@@ -465,7 +514,8 @@ class PathDebugNode(Node):
                       unobserved_topics=[self.topic(t) for t in self.expected_topics if not self.counts[t]],
                       goals_index_scope='latest 128 goals, latest 16 events each; full history in records.jsonl',
                       parameters_completed=sorted(self.parameters_completed),
-                      parameters_pending=sorted(set(self.parameter_clients)-self.parameters_completed),
+                      parameter_session=self.parameter_session, parameters_failed=self.parameters_failed,
+                      parameters_pending=sorted(set(self.parameter_clients)-self.parameters_completed-set(self.parameters_failed)),
                       finished_utc=datetime.now(timezone.utc).isoformat())
         try:
             atomic_json(self.writer.directory / 'summary.json', status)

@@ -24,12 +24,19 @@
 | 패키지 | 기준 버전 |
 | --- | --- |
 | `ros_gz_bridge` | 1.0.24 |
-| `nav2_bringup`, `nav2_controller`, `nav2_smac_planner`, `dwb_core`, `dwb_plugins`, `dwb_critics` | 1.3.13 |
+| `nav2_smac_planner` (workspace 패치본) | 1.3.13 |
+| `nav2_bringup`, `nav2_controller`, `dwb_core`, `dwb_plugins`, `dwb_critics`, `nav2_velocity_smoother`, `nav2_collision_monitor` (Jazzy 설치본) | 1.3.14 |
 | `slam_toolbox` | 2.8.5 |
 | `robot_localization` | 3.8.3 |
 | `diff_drive_controller` | 4.42.1 |
 
-`nav2_smac_planner`는 Navigation2 1.3.13 커밋 `f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501`의 소스를 이 workspace에서 빌드합니다. 연속 격자 좌표의 중심 셀 조회와 footprint 변환 두 곳을 보완하여 실제 자세와 충돌 검사 자세를 일치시킵니다. 또한 경계 곡선과 평활화 반복에서 `worldToMap` 실패를 확인하고, 맵 크기와 같은 상한 좌표·비유한 좌표·범위 밖 선형 인덱스를 거부합니다. Lattice가 반환하는 최종 경로는 연속 yaw의 채워진 footprint와 자세 사이 보간 구간을 검사하며, 실패하면 검사에 통과한 원래 경로만 반환합니다. 둘 다 충돌하면 계획 실패를 반환합니다. `xy_goal_tolerance`를 활성화한 diff/omni 모델은 목표의 XY 허용 범위 안에서 현재 자세의 회전과 원래 목표로의 짧은 연결을 검사해 반환합니다. 범위 밖 탐색·움직임 집합·차체·lethal/unknown 판정 기준은 유지합니다. 원본/변경 해시와 패치는 [출처 기록](../src/nav2_smac_planner/provenance.json)에 있으며, 실행 시 `ros2 pkg prefix nav2_smac_planner`는 이 workspace의 `install/nav2_smac_planner`여야 합니다. 나머지 Nav2 패키지는 설치된 1.3.13을 사용합니다.
+`nav2_smac_planner`는 Navigation2 1.3.13 커밋 `f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501`에 패치를 적용해 workspace에서 빌드합니다. `ros2 pkg prefix nav2_smac_planner`는 이 workspace의 `install/nav2_smac_planner`를 가리켜야 합니다. [원본 커밋·파일 해시·패치 목록](../src/nav2_smac_planner/provenance.json)
+
+- Lattice는 실제 출발 위치·방향에서 첫 격자 자세까지, 각 진입 움직임과 목표를 향한 해석적 연결에서 차체 전체가 지나가는 영역을 검사합니다. 같은 격자점에 들어와도 진입 경로별 비용과 충돌을 다시 계산합니다. Lattice와 Hybrid는 좌우 대칭 거리 추정의 반사 방향 인덱스를 유효 범위로 정규화합니다.
+- 경계 곡선·평활화·격자 좌표 변환은 비유한 좌표와 지도 상한을 포함한 범위 밖 인덱스를 거부합니다. 최종 경로는 연속 yaw의 채워진 footprint로 자세 사이까지 다시 검사합니다. 평활화 경로가 충돌하면 검사에 통과한 원래 경로를 사용하고, 둘 다 충돌하면 계획 실패를 반환합니다.
+- 시뮬레이션의 diff Lattice와 제어기는 원래 목표의 XY 허용 범위 0.10 m를 공유합니다. 이 범위에서는 제자리 회전과 원래 목표로 이어지는 짧은 연결을 충돌 검사합니다. 제어기는 도착을 판정하는 매 주기마다 위치·방향·측정 정지를 함께 확인합니다.
+
+Jazzy의 `velocity_smoother`와 `collision_monitor`는 설치된 Nav2 1.3 계열 패키지를 사용합니다. 명령 체인 검증은 두 바이너리를 직접 실행해 정확한 패치 버전과 실행 파일 해시, 원본 명령 만료 및 장애물 반응을 기록합니다.
 
 문서의 최신 Jazzy branch와 설치된 바이너리가 완전히 같다고 가정하지 않습니다. 특히 stamped velocity 옵션·smoother timestamp 보존 설정은 P1에서 설치본의 선언 파라미터와 실제 메시지로 확인합니다.
 

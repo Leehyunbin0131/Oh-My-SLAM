@@ -26,6 +26,7 @@ def test_goal_checker_thresholds_are_connected_to_planner_and_dwb(tmp_path):
         # A* fallback distance is deliberately separate from the arrival circle.
         assert planner['tolerance'] == .1
         assert controller['goal_checker']['plugin'] == 'nav2_controller::StoppedGoalChecker'
+        assert controller['goal_checker']['stateful'] is False
 
 
 @pytest.mark.parametrize('section,plugin,field,value', [
@@ -33,6 +34,7 @@ def test_goal_checker_thresholds_are_connected_to_planner_and_dwb(tmp_path):
     ('controller_server', 'FollowPath', 'xy_goal_tolerance', .2),
     ('controller_server', 'FollowPath', 'trans_stopped_velocity', .1),
     ('controller_server', 'FollowPath', 'RotateToGoal.scale', 0.),
+    ('controller_server', 'goal_checker', 'stateful', True),
 ])
 def test_resolved_arrival_contract_rejects_divergence(section, plugin, field, value):
     share = Path(get_package_share_directory('omslam_navigation'))

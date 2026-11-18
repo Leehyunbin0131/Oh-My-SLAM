@@ -20,8 +20,10 @@ private:
   double last_now_ = -1.;
   std::string memory_frame_ = "odom";
   std::mutex mutex_;
+  bool new_epoch_ = false;
   std::vector<tf2::Vector3> transformed_, archived_;
   omm_perception_msgs::msg::ObstacleMemory::ConstSharedPtr snapshot_, accepted_;
   rclcpp::Subscription<omm_perception_msgs::msg::ObstacleMemory>::SharedPtr sub_;
+  rclcpp::JumpHandler::SharedPtr jump_handler_;
 };
 } // namespace omm_costmap_layers

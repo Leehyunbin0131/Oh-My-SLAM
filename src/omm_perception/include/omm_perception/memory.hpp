@@ -18,6 +18,7 @@ struct Voxel {
   int free_frames = 0;
   Visibility visibility = Visibility::Visible;
   uint64_t owner = 0;
+  uint64_t last_free_frame = 0;
 };
 struct KeyHash {
   size_t operator()(const std::array<int, 3> &k) const;
@@ -41,7 +42,8 @@ public:
   void clearVisible(const cv::Mat &depth, const Intrinsics &k,
                     const Eigen::Isometry3d &camera_from_memory, double stamp,
                     double margin, int required_frames, double min_depth,
-                    double max_depth);
+                    double max_depth, double max_gap = std::numeric_limits<double>::infinity());
+  void interruptFreeEvidence() { ++clear_frame_; }
   void reset();
   const auto &voxels() const { return voxels_; }
   uint64_t cleared() const { return cleared_; }
@@ -49,7 +51,7 @@ public:
 private:
   double voxel_size_;
   size_t max_voxels_;
-  uint64_t cleared_ = 0;
+  uint64_t cleared_ = 0, clear_frame_ = 0;
   double last_clear_stamp_ = -std::numeric_limits<double>::infinity();
   sqlite3 *archive_ = nullptr;
   Eigen::Vector3d center_ = Eigen::Vector3d::Zero();

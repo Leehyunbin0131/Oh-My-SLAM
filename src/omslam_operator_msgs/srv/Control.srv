@@ -1,4 +1,5 @@
-# acquire, release, set_mode, validate (read-only owner validation).
+# acquire, release, set_mode, validate, begin_map, hold_map, end_map.
+# Map operations use one private request_id through begin/hold/end.
 string command
 string owner_id
 string token

@@ -196,8 +196,7 @@ NodeLattice::NodeLattice(const uint64_t index)
   _index(index),
   _was_visited(false),
   _motion_primitive(nullptr),
-  _backwards(false),
-  _is_node_valid(false)
+  _backwards(false)
 {
 }
 
@@ -217,7 +216,6 @@ void NodeLattice::reset()
   pose.theta = 0.0f;
   _motion_primitive = nullptr;
   _backwards = false;
-  _is_node_valid = false;
 }
 
 bool NodeLattice::isNodeValid(
@@ -226,20 +224,15 @@ bool NodeLattice::isNodeValid(
   MotionPrimitive * motion_primitive,
   bool is_backwards)
 {
-  // Already found, we can return the result
-  if (!std::isnan(_cell_cost)) {
-    return _is_node_valid;
-  }
-
-  // Check primitive end pose
+  // An indexed node can be reached at different continuous poses and through
+  // different primitives. Recompute this candidate's endpoint and edge cost.
   // Convert grid quantization of primitives to radians, then collision checker quantization
-  static const double bin_size = 2.0 * M_PI / collision_checker->getPrecomputedAngles().size();
+  const double bin_size = 2.0 * M_PI / collision_checker->getPrecomputedAngles().size();
   const double angle = std::fmod(motion_table.getAngleFromBin(this->pose.theta),
       2.0 * M_PI) / bin_size;
   if (collision_checker->inCollision(
       this->pose.x, this->pose.y, angle /*bin in collision checker*/, traverse_unknown))
   {
-    _is_node_valid = false;
     _cell_cost = collision_checker->getCost();
     return false;
   }
@@ -258,31 +251,32 @@ bool NodeLattice::isNodeValid(
     MotionPose initial_pose, prim_pose;
     initial_pose._x = this->pose.x - (motion_primitive->poses.back()._x / grid_resolution);
     initial_pose._y = this->pose.y - (motion_primitive->poses.back()._y / grid_resolution);
-    initial_pose._theta = motion_table.getAngleFromBin(motion_primitive->start_angle);
+    const float direction = is_backwards ? M_PI : 0.0f;
+    initial_pose._theta = motion_table.getAngleFromBin(motion_primitive->start_angle) + direction;
+    MotionPose previous = initial_pose;
 
     for (auto it = motion_primitive->poses.begin(); it != motion_primitive->poses.end(); ++it) {
+      prim_pose._x = initial_pose._x + (it->_x / grid_resolution);
+      prim_pose._y = initial_pose._y + (it->_y / grid_resolution);
+      prim_pose._theta = std::fmod(it->_theta + direction, 2.0 * M_PI);
+      if (collision_checker->latticeSweepCollides(previous._x, previous._y, previous._theta,
+          prim_pose._x, prim_pose._y, prim_pose._theta))
+      {
+        _cell_cost = OCCUPIED;
+        return false;
+      }
+      previous = prim_pose;
       // poses are in metric coordinates from (0, 0), not grid space yet
       pose_dist = *it - last_pose;
       // Avoid square roots by (hypot(x, y) > res) == (x*x+y*y > diag*diag)
       if (pose_dist._x * pose_dist._x + pose_dist._y * pose_dist._y > resolution_diag_sq) {
         last_pose = *it;
-        // Convert primitive pose into grid space if it should be checked
-        prim_pose._x = initial_pose._x + (it->_x / grid_resolution);
-        prim_pose._y = initial_pose._y + (it->_y / grid_resolution);
-        // If reversing, invert the angle because the robot is backing into the primitive
-        // not driving forward with it
-        if (is_backwards) {
-          prim_pose._theta = std::fmod(it->_theta + M_PI, 2.0 * M_PI);
-        } else {
-          prim_pose._theta = std::fmod(it->_theta, 2.0 * M_PI);
-        }
         if (collision_checker->inCollision(
             prim_pose._x,
             prim_pose._y,
             prim_pose._theta / bin_size /*bin in collision checker*/,
             traverse_unknown))
         {
-          _is_node_valid = false;
           _cell_cost = std::max(max_cell_cost, collision_checker->getCost());
           return false;
         }
@@ -292,8 +286,7 @@ bool NodeLattice::isNodeValid(
   }
 
   _cell_cost = max_cell_cost;
-  _is_node_valid = true;
-  return _is_node_valid;
+  return true;
 }
 
 float NodeLattice::getTraversalCost(const NodePtr & child)
@@ -416,7 +409,8 @@ float NodeLattice::getDistanceHeuristic(
     // Need to mirror angle if Y coordinate was mirrored
     int theta_pos;
     if (node_coords_relative.y < 0.0) {
-      theta_pos = motion_table.num_angle_quantization - node_coords_relative.theta;
+      theta_pos = (motion_table.num_angle_quantization -
+        static_cast<unsigned int>(node_coords_relative.theta)) % motion_table.num_angle_quantization;
     } else {
       theta_pos = node_coords_relative.theta;
     }

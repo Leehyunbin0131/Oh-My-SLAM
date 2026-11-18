@@ -183,3 +183,28 @@ def test_clock_rewind_discards_stop_history_and_allows_explicit_reactivation():
     stamp = sample(gate, 3.04, 12.34)
     assert gate.manual(gate.token, gate.epoch_ns, 2, True, stamp, FRAME, MOVE, stamp, 12.34)
     assert gate.final(stamp, FRAME, MOVE, stamp, 12.34)
+def test_odometry_lateral_motion_cannot_confirm_a_stop(monkeypatch):
+    from types import SimpleNamespace
+    from nav_msgs.msg import Odometry
+    from omslam_navigation.navigation_guard import NavigationGuard
+
+    gate = OperatorGate()
+    fixture = SimpleNamespace(core=gate, p={'odom_frame': 'odom', 'base_frame': 'base_footprint'},
+                              remember=lambda *_: None, operator=object())
+    for i in range(10):
+        wall = 3.0 + 0.1 * i
+        stamp = 3_000_000_000 + i * 100_000_000
+        monkeypatch.setattr('omslam_navigation.navigation_guard.time.monotonic', lambda: wall)
+        gate.clock(stamp, wall)
+        for key in ('wheel', 'odom'):
+            item = Odometry()
+            item.header.frame_id, item.child_frame_id = 'odom', 'base_footprint'
+            item.header.stamp.sec, item.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+            item.pose.pose.orientation.w = 1.
+            item.twist.twist.linear.y = 0.25 if key == 'odom' and i < 5 else 0.
+            NavigationGuard.on_odom(fixture, key, item)
+        if i < 5:
+            assert not gate.stopped(stamp, wall)
+        else:
+            stopped = gate.stopped(stamp, wall)
+    assert stopped

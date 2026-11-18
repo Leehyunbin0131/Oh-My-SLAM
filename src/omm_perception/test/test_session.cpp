@@ -251,6 +251,28 @@ TEST_F(SessionTest, EncodingsFreshnessAndClockReset) {
   EXPECT_EQ(snapshot->archived_voxels, 0u);
 }
 
+TEST_F(SessionTest, InvalidDepthInterruptsFreeVotesBeforeSensorTimeout) {
+  observation(10., true, false);
+  ASSERT_TRUE(until([&] { return snapshot && snapshot->geometry_healthy && !snapshot->points.empty(); }));
+  auto free_frame = [&](double t) {
+    observation(t, false, false);
+    return until([&] { return snapshot && snapshot->geometry_healthy &&
+        snapshot->observation_stamp == stamp(t); });
+  };
+  for (int i=1; i<=4; ++i) ASSERT_TRUE(free_frame(10. + .05*i));
+  EXPECT_EQ(snapshot->cleared_voxels_total, 0u);
+  auto invalid = image(10.25, false, false);
+  std::fill(invalid.data.begin(), invalid.data.end(), 0);
+  setTime(10.25); imu(10.25); pump(.01); depth_pub->publish(invalid);
+  ASSERT_TRUE(until([&] { return snapshot && !snapshot->sensor_healthy; }));
+  for (int i=1; i<=4; ++i) {
+    ASSERT_TRUE(free_frame(10.25 + .05*i));
+    EXPECT_EQ(snapshot->cleared_voxels_total, 0u);
+  }
+  ASSERT_TRUE(free_frame(10.5));
+  EXPECT_GT(snapshot->cleared_voxels_total, 0u);
+}
+
 TEST_F(SessionTest, FutureSensorsWaitForClockWithoutRenewingReceipt) {
   observation(10., true, false);
   ASSERT_TRUE(until([&] { return snapshot && snapshot->sensor_healthy &&

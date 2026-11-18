@@ -17,8 +17,7 @@ from rclpy.parameter import parameter_value_to_python
 from rclpy.parameter_client import AsyncParameterClient
 from slam_toolbox.srv import DeserializePoseGraph, SerializePoseGraph
 
-
-BUNDLE_SUFFIXES = ('.yaml', '.pgm', '.posegraph', '.data', '.metadata.json')
+from .bundle_transaction import BUNDLE_SUFFIXES, check_graph_published, staged_map
 
 
 def _file_info(path):
@@ -94,10 +93,12 @@ def _package_version(package):
 
 def _save(args):
     prefix = _prefix(args.output)
-    existing = [str(prefix) + suffix for suffix in BUNDLE_SUFFIXES
-                if Path(str(prefix) + suffix).exists()]
-    if existing:
-        raise ValueError(f'Refusing to overwrite existing map files: {existing}')
+    with staged_map(prefix, BUNDLE_SUFFIXES) as stage:
+        _write_bundle(args, stage)
+    print(json.dumps({'saved': str(prefix), 'metadata': str(prefix) + '.metadata.json'}, sort_keys=True))
+
+
+def _write_bundle(args, prefix):
     # Validate provenance before invoking either service that writes files.
     source = _git(args.workspace)
     dependency_file = Path(source['workspace']) / 'dependencies.repos'
@@ -136,6 +137,14 @@ def _save(args):
             timeout=args.timeout + 5.)
         if raster.returncode:
             raise RuntimeError(f'Nav2 map save failed: {raster.stdout.strip()}')
+        yaml_path = Path(str(prefix) + '.yaml')
+        config = yaml.safe_load(yaml_path.read_text(encoding='utf-8'))
+        image_path = Path(config['image'])
+        if (prefix.parent / image_path).resolve() != Path(str(prefix) + '.pgm'):
+            raise ValueError('Map saver referenced an unexpected image')
+        if image_path.is_absolute():
+            config['image'] = image_path.name
+            yaml_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding='utf-8')
         graph_request = SerializePoseGraph.Request()
         graph_request.filename = str(prefix)
         graph_response = _call(node, SerializePoseGraph, '/slam_toolbox/serialize_map',
@@ -170,7 +179,6 @@ def _save(args):
         with destination.open('x', encoding='utf-8') as output:
             json.dump(metadata, output, indent=2, sort_keys=True)
             output.write('\n')
-        print(json.dumps({'saved': str(prefix), 'metadata': str(destination)}, sort_keys=True))
     finally:
         node.destroy_node()
 
@@ -180,6 +188,7 @@ def _load(args):
     for suffix in ('.posegraph', '.data'):
         if not Path(str(prefix) + suffix).is_file():
             raise ValueError(f'Missing pose graph file: {prefix}{suffix}')
+    check_graph_published(prefix)
     metadata_path = Path(str(prefix) + '.metadata.json')
     if metadata_path.is_file():
         metadata = json.loads(metadata_path.read_text(encoding='utf-8'))

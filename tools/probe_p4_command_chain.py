@@ -10,6 +10,7 @@ Every required branch must be observed; missing evidence is NOT_EXERCISED.
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 from collections import defaultdict
 import hashlib
 import importlib
@@ -93,6 +94,8 @@ class Probe:
         self.auto_source = None
         self.source_stamps = set()
         self.next_clock = self.next_sensors = self.next_source = 0.0
+        self.clock_times = []
+        self.clock_stamps = []
         self.last_clock_ns = 100_000_000_000
         self.sensor_mode = 'clear'
         self.rclpy, self.Time = rclpy, Time
@@ -151,10 +154,10 @@ class Probe:
         self.result['checks'][name] = {'status': status, **evidence}
         self.write_result()
 
-    def velocity(self, kind, msg):
+    def velocity(self, kind, msg, **metadata):
         return self.event(kind, stamp_ns=stamp_ns(msg.header.stamp),
                           frame_id=msg.header.frame_id,
-                          vx=msg.twist.linear.x, wz=msg.twist.angular.z)
+                          vx=msg.twist.linear.x, wz=msg.twist.angular.z, **metadata)
 
     def monitored(self, msg):
         self.velocity('monitored', msg)
@@ -162,8 +165,21 @@ class Probe:
             self.final_pub.publish(msg)
             self.velocity('relayed_final', msg)
 
-    def output(self, msg):
-        self.event('output', vx=msg.linear.x, wz=msg.angular.z)
+    def output(self, msg, info):
+        # RMW timestamps describe this installed base publisher and transport.
+        # This subscriber may run later when several sensor callbacks are ready.
+        wall_ns = time.time_ns()
+        mono_ns = time.monotonic_ns()
+        published_ns = info['source_timestamp']
+        if not 0 < published_ns <= wall_ns:
+            raise RuntimeError('Base output has no usable RMW publication timestamp')
+        published_mono_ns = mono_ns - (wall_ns - published_ns)
+        i = bisect_right(self.clock_times, published_mono_ns) - 1
+        self.event('output', vx=msg.linear.x, wz=msg.angular.z,
+                   rmw_source_ns=published_ns, rmw_received_ns=info['received_timestamp'],
+                   publisher_monotonic=published_mono_ns / 1e9,
+                   clock_at_publication_ns=self.clock_stamps[i] if i >= 0 else None,
+                   callback_delay_from_publication_s=(wall_ns - published_ns) / 1e9)
 
     def state(self, msg):
         self.event('monitor_state', action_type=msg.action_type, polygon_name=msg.polygon_name)
@@ -183,13 +199,16 @@ class Probe:
         return self.velocity('source', msg)
 
     def final(self, msg):
+        publish_start = time.monotonic()
         self.final_pub.publish(msg)
-        return self.velocity('injected_final', msg)
+        return self.velocity('injected_final', msg, publish_start_monotonic=publish_start)
 
     def fixture(self):
         now = time.monotonic()
         if now >= self.next_clock:
             self.last_clock_ns = self.sim_now()
+            self.clock_times.append(time.monotonic_ns())
+            self.clock_stamps.append(self.last_clock_ns)
             self.clock_pub.publish(self.Clock(clock=self.to_time(self.last_clock_ns)))
             self.next_clock = now + 0.002
         if now >= self.next_sensors:
@@ -268,12 +287,21 @@ class Probe:
         parameters.update(yaml.safe_load((sim_share / 'config/sim_base.yaml').read_text()))
         param_file = self.directory / 'installed_parameters.yaml'
         param_file.write_text(yaml.safe_dump(parameters, sort_keys=False))
-        versions = {name: ET.parse(Path(get_package_share_directory(name)) / 'package.xml').findtext('version')
-                    for name in package_names}
+        manifests = {name: Path(get_package_share_directory(name)) / 'package.xml'
+                     for name in package_names}
+        versions = {name: ET.parse(path).findtext('version') for name, path in manifests.items()}
+        provenance = self.args.workspace / 'src/nav2_smac_planner/provenance.json'
+        nav2_baseline = json.loads(provenance.read_text())['package_version']
+        family = nav2_baseline.split('.')[:2]
         self.result['manifest'] = {
             'workspace': str(self.args.workspace), 'ros_domain_id': self.args.domain,
             'prefixes': {key: str(value) for key, value in prefixes.items()},
             'versions': versions, 'python_artifacts': artifacts,
+            'package_manifests': {name: {'path': str(path), 'sha256': digest(path)}
+                                  for name, path in manifests.items()},
+            'nav2_release': {'ros_distro': os.environ.get('ROS_DISTRO'), 'baseline': nav2_baseline,
+                             'family': '.'.join(family), 'provenance': str(provenance),
+                             'provenance_sha256': digest(provenance)},
             'parameter_file': str(param_file), 'parameter_sha256': digest(param_file),
             'clock': {'start_ns': 100_000_000_000, 'rate': 1.0,
                       'publication_period_s': 0.002, 'stamp_age_offset_s': 0.01},
@@ -282,13 +310,26 @@ class Probe:
             'sink': '/sim/cmd_vel', 'physical_devices_opened': False,
             'probe_sha256': digest(Path(__file__)),
         }
-        valid = (all(prefixes[name] == self.args.workspace / 'install' / name
-                     for name in ('omslam_base', 'omslam_sim', 'omslam_navigation'))
-                 and all(item['installed_sha256'] == item['source_sha256'] for item in artifacts.values())
-                 and all(versions[name] == '1.3.13' for name in ('nav2_velocity_smoother', 'nav2_collision_monitor')))
-        self.check('installed_artifacts', valid, manifest='manifest')
-        if not valid:
-            raise RuntimeError('Installed package identity or source hashes do not match the target workspace')
+        wrong_prefixes = [name for name in ('omslam_base', 'omslam_sim', 'omslam_navigation')
+                          if prefixes[name] != self.args.workspace / 'install' / name]
+        mismatched_modules = [name for name, item in artifacts.items()
+                              if item['installed_sha256'] != item['source_sha256']]
+        errors = []
+        if wrong_prefixes:
+            errors.append('workspace prefix mismatch: ' + ', '.join(wrong_prefixes))
+        if mismatched_modules:
+            errors.append('source hash mismatch: ' + ', '.join(mismatched_modules))
+        if os.environ.get('ROS_DISTRO') != 'jazzy':
+            errors.append(f"expected the Jazzy underlay, found {os.environ.get('ROS_DISTRO')!r}")
+        # The workspace pins its patched planner exactly. The underlay provides
+        # smoother and monitor; test the installed patch's complete behavior.
+        for name in ('nav2_velocity_smoother', 'nav2_collision_monitor'):
+            parts = (versions[name] or '').split('.')
+            if len(parts) != 3 or not parts[2].isdigit() or parts[:2] != family:
+                errors.append(f"{name}: expected Nav2 {'.'.join(family)}.x, found {versions[name]}")
+        self.check('installed_artifacts', not errors, manifest='manifest', errors=errors)
+        if errors:
+            raise RuntimeError('; '.join(errors))
         self.broadcaster.sendTransform(self.transforms)
         nodes = (
             ('nav2_velocity_smoother', 'velocity_smoother',
@@ -364,26 +405,29 @@ class Probe:
         return start
 
     def expiry(self, start, source_event):
-        outputs = self.since('output', start)
+        outputs = [e for e in self.streams['output'] if e['publisher_monotonic'] >= start]
         nonzero = [event for event in outputs if moving(event)]
         stamp = source_event['stamp_ns']
-        sim_deadline_wall = self.started + (stamp - 100_000_000_000) / 1e9 + LEASE
-        # The wall clock is mapped 1:1 to synthetic ROS time. Starting at the
-        # original stamp is stricter than starting at its later DDS receipt.
+        # The fixture maps 1:1 from monotonic time to ROS time, but /clock
+        # advances in discrete messages. Keep both clocks at publication.
         wall_origin = self.started + (stamp - 100_000_000_000) / 1e9
-        last_nonzero = nonzero[-1]['wall_monotonic'] if nonzero else start
-        zeros = [event for event in outputs if not moving(event) and event['wall_monotonic'] > last_nonzero]
-        first_zero = zeros[0] if zeros else None
-        after_deadline = [event for event in outputs if event['wall_monotonic'] >= sim_deadline_wall + TICK]
+        sim_deadline_wall = wall_origin + LEASE
+        last_nonzero = max((e['publisher_monotonic'] for e in nonzero), default=start)
+        zeros = [e for e in outputs if not moving(e) and e['publisher_monotonic'] > last_nonzero]
+        first_zero = min(zeros, key=lambda e: e['publisher_monotonic'], default=None)
+        after_deadline = [e for e in outputs if e['publisher_monotonic'] >= sim_deadline_wall + TICK or
+                          (e['clock_at_publication_ns'] - stamp) / 1e9 >= LEASE + TICK]
         live_finals_after_expiry = [event for event in self.since('relayed_final', start)
                                    if event['wall_monotonic'] >= sim_deadline_wall + TICK and moving(event)]
         metrics = {
             'original_stamp_ns': stamp, 'source_publish_monotonic': source_event['wall_monotonic'],
             'original_wall_origin': wall_origin, 'deadline_monotonic': sim_deadline_wall,
             'allowance_s': TICK, 'nonzero_samples': len(nonzero), 'post_deadline_samples': len(after_deadline),
-            'first_persistent_zero_monotonic': first_zero['wall_monotonic'] if first_zero else None,
-            'zero_wall_age_s': first_zero['wall_monotonic'] - wall_origin if first_zero else None,
-            'zero_sim_age_s': (first_zero['sim_ns'] - stamp) / 1e9 if first_zero else None,
+            'first_persistent_zero_monotonic': first_zero['publisher_monotonic'] if first_zero else None,
+            'zero_wall_age_s': first_zero['publisher_monotonic'] - wall_origin if first_zero else None,
+            'zero_sim_age_s': (first_zero['clock_at_publication_ns'] - stamp) / 1e9 if first_zero else None,
+            'zero_callback_age_s': first_zero['wall_monotonic'] - wall_origin if first_zero else None,
+            'zero_callback_delay_s': first_zero['callback_delay_from_publication_s'] if first_zero else None,
             'last_nonzero_monotonic': last_nonzero,
             'nonzero_final_samples_after_expiry': len(live_finals_after_expiry),
         }
@@ -462,15 +506,17 @@ class Probe:
         stop = self.command(0.0)
         stop_event = self.final(stop)
         self.pump(0.045)
-        samples = self.since('output', stop_event['wall_monotonic'])
-        zeros = [e for e in samples if not moving(e)]
-        first_zero_latency = zeros[0]['wall_monotonic'] - stop_event['wall_monotonic'] if zeros else None
+        injected = stop_event['publish_start_monotonic']
+        samples = [e for e in self.streams['output'] if e['publisher_monotonic'] >= injected]
+        first_zero = next((e for e in samples if not moving(e)), None)
+        first_zero_latency = first_zero['publisher_monotonic'] - injected if first_zero else None
         self.check('fresh_header_zero_priority',
                    first_zero_latency is not None and first_zero_latency <= TICK
-                   and all(not moving(e) for e in samples if e['wall_monotonic'] >= stop_event['wall_monotonic'] + TICK),
+                   and all(not moving(e) for e in samples if e['publisher_monotonic'] >= injected + TICK),
                    exercised=moved_before_zero and len(samples) >= 2,
                    zero_stamp_ns=stamp_ns(stop.header.stamp), original_stamp_ns=stamp_ns(original.header.stamp),
-                   first_zero_latency_s=first_zero_latency, output_count=len(samples))
+                   first_zero_latency_s=first_zero_latency, output_count=len(samples),
+                   zero_callback_delay_s=first_zero['callback_delay_from_publication_s'] if first_zero else None)
         start = self.select_phase('old_intent_after_zero')
         for _ in range(5):
             self.source(original)

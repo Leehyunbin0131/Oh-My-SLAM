@@ -71,6 +71,8 @@ def test_lease_source_final_stop_and_activation():
 
 
 def test_encoder_reset_and_nonfinite_geometry():
+    with pytest.raises(ValueError, match='overflow'):
+        Geometry().rpm(-1e308, 0.)
     with pytest.raises(ValueError):Geometry(left_radius=float('nan'))
     with pytest.raises(ValueError):Geometry(max_rpm=100.01)
     o=EncoderOdometry(Geometry());o.update(0,20000,20000,1000000000)
@@ -139,3 +141,26 @@ def test_requested_issue_time_cannot_reverse_or_extend_a_lease():
     assert gate.requested(1_150_000_000, 1_250_000_000, 10.2)
     assert gate.source[1] == issued  # repeated stamp cannot refresh the lease
     assert gate.current(issued + .301) is None
+
+
+@pytest.mark.parametrize('limit,vx,wz', [(50., .34, .52), (95., .85, .47)])
+def test_saturated_velocity_is_within_serial_rpm_limit(limit, vx, wz):
+    from types import SimpleNamespace
+    from omslam_base.vendor import load_control_module
+
+    drive_module = load_control_module('wheel_drive')
+    calibration = SimpleNamespace(wheels={})
+    wire = []
+    client = SimpleNamespace(calibration=calibration, info={'stream_supported': True},
+                             latest={'received_at': 1., 'fault': 0}, command=lambda op: None,
+                             send=wire.append, set_speed=lambda *rpm, lease_ms: wire.append(rpm))
+    cfg = SimpleNamespace(calibration=calibration, max_rpm=limit, commands=lambda *rpm: rpm)
+    drive = drive_module.WheelDrive(client, cfg, clock=lambda: 1.)
+    for sign in (-1., 1.):
+        left, right = Geometry(max_rpm=limit).rpm(vx * sign, wz * sign)
+        assert abs(right) == limit and abs(left) <= limit
+        drive.set_target_rpm(left, right)
+        drive.tick(force=True)
+        assert wire[-1] == (round(left*100), sign*int(limit*100))
+    with pytest.raises(drive_module.MotorError):
+        drive.set_target_rpm(0., limit+.01)

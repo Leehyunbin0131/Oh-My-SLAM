@@ -38,7 +38,9 @@ cd ~/MyRos/Oh_My_SLAM
 
 목표 접근과 방향 정렬의 위치 기준은 `controller_server.goal_checker.xy_goal_tolerance` 한 곳에서 설정합니다. launch가 같은 값을 `GridBased.xy_goal_tolerance`와 `FollowPath.xy_goal_tolerance`에 전달하고, `goal_checker.trans_stopped_velocity`도 DWB에 전달합니다. 기본 위치 범위는 10 cm이며 이 안에서는 전역계획기가 원래 목표 좌표·방향을 유지한 짧은 마무리 경로를 반환합니다. 현재 위치의 제자리 회전과 목표까지의 연결 구간 전체를 footprint로 검사하고, 충돌하면 계획 실패를 반환합니다. 범위 밖은 기존 Lattice 탐색을 사용하되 경로 끝점을 원래 목표에 맞추고 짧은 연결 구간을 검사합니다. 연결 길이는 위치 허용오차와 격자 한 셀의 대각선 길이 중 큰 값으로 제한합니다. `GridBased.tolerance`는 A* 탐색의 fallback 허용값으로 별도 의미를 가집니다.
 
-위치 범위에 진입해도 즉시 성공하지 않습니다. DWB가 감속·방향 정렬을 수행하고 `StoppedGoalChecker`가 방향 오차와 측정 속도를 확인한 뒤 완료합니다. 이 기준을 변경하려면 도착 판정 설정을 수정하고 세션을 다시 시작합니다. GUI에서 목표가 완료·취소·실패하면 진행 경로 표시를 지우고 이전 경로의 지연 수신을 무시합니다.
+위치 범위에 진입해도 즉시 성공하지 않습니다. DWB가 감속·방향 정렬을 수행하는 동안에도 매 주기 목표까지의 거리를 다시 검사합니다. 정렬 중에 중심이 10 cm 밖으로 밀리면 다시 접근하고, 위치·방향·측정 속도가 동시에 허용 범위에 들면 완료합니다. 이 기준을 변경하려면 도착 판정 설정을 수정하고 세션을 다시 시작합니다. GUI에서 목표가 완료·취소·실패하면 진행 경로 표시를 지우고 이전 경로의 지연 수신을 무시합니다.
+
+콘솔에서 1·2 RPM처럼 낮은 속도를 지정하면 DWB가 이동 후보의 예측 시간을 늘립니다. 진행 감시기도 승인된 속도로 5초간 갈 수 있는 거리·회전량을 반영하며, 10초간 진행이 없으면 실패로 판정합니다.
 
 전역 계획기는 공식 Nav2 1.3.13 패키지에 연속 좌표 충돌 검사 패치를 적용한 workspace 설치본을 사용합니다. 격자 경계를 넘을 때 footprint 검사 위치가 셀 중심으로 이동하지 않도록 하며, 실제 장애물·unknown 거부 기준은 유지합니다. 원본 커밋·파일 해시·패치는 [기술 기준](baseline.md#개발-pc-설치-버전)과 패키지의 `provenance.json`에 기록합니다.
 
@@ -51,11 +53,10 @@ TF 발행 책임은 고정된 launch 구성과 실제 endpoint 목록을 함께 
 ```bash
 cd ~/MyRos/Oh_My_SLAM
 source /opt/ros/jazzy/setup.bash
-colcon build --packages-up-to omslam_navigation \
-  --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
+/usr/bin/python3 tools/build_navigation.py
 ```
 
-빌드가 성공한 뒤 새 셸에서 다음 환경을 준비합니다. 명령을 보내는 다른 터미널에도 같은 domain을 설정합니다.
+빌드 도구는 소스와 설치 파일의 SHA-256을 기록하고 성공한 빌드를 `reports/sim-navigation/latest_build.json`에 저장합니다. 빌드가 성공한 뒤 새 셸에서 다음 환경을 준비합니다. 명령을 보내는 다른 터미널에도 같은 domain을 설정합니다.
 
 ```bash
 cd ~/MyRos/Oh_My_SLAM
@@ -159,7 +160,7 @@ ros2 service call /navigation/enable std_srvs/srv/SetBool '{data: false}'
 
 현재 P4 인수는 **한 실행에서 목표 5곳에 연속 정상 도착**하면 종료합니다. 최신 빌드와 변경에 직접 관련된 회귀 검사를 통과한 뒤 실행합니다.
 
-이 기준의 검증 결과는 **5/5 연속 도착, 충돌 0회**입니다. 최대 위치 오차는 0.1111 m, 최대 yaw 오차는 0.0100 rad였고 모든 목표에서 정지까지 0.412 s 이내였습니다. 실제 차체의 최소 장애물 여유는 0.1299 m이며, 최대 바퀴 명령은 48.31 RPM으로 95 RPM 한도 안입니다. 마지막 목표 뒤 구동 해제와 프로세스 종료를 확인했습니다.
+수정 후 Gazebo에서 **5/5 연속 도착, 충돌 0회, 복구 재시도 0회**를 확인했습니다. SLAM 좌표에서 제어기가 도착을 판정한 뒤, Gazebo 기준 실제 위치와 목표를 비교한 최대 오차는 0.1218 m, 최대 방향 오차는 0.0147 rad였습니다. 정지 확인에는 최대 0.836초가 걸렸습니다. 차체와 장애물의 최소 여유는 0.0954 m였고 최종 바퀴 명령은 최대 100 RPM이었습니다. 다섯 번째 목표 뒤 구동 해제와 프로세스 종료를 확인했습니다.
 
 ```bash
 /usr/bin/python3 tools/verify_sim_navigation.py \
@@ -168,7 +169,14 @@ ros2 service call /navigation/enable std_srvs/srv/SetBool '{data: false}'
 
 같은 코스에서 `(1,0,0)` → `(5,0,π/2)` → `(5,4,π/2)` → `(0,4,−π/2)` → `(0,0,0)`을 순서대로 요청합니다. 좌표는 시작 시 고정한 기준의 `(x m, y m, yaw rad)`입니다. 각 목표는 action 성공 후 측정 정지와 truth 기준 위치 오차 ≤0.15 m·yaw 오차 ≤0.20 rad를 확인합니다. 센서·TF·인지·명령·충돌 관측을 같은 실행에 유지하며, 5개 통과 뒤 구동 권한을 해제하고 실행을 정리합니다.
 
-기존 `integrated` 모드는 전체 기능·실패 주입 검증을 위한 선택 도구입니다. 그 전체 항목을 5목표 인수 뒤 추가로 수행할 필요는 없습니다. 비주행 계약 도구 `tools/verify_nav_contracts.py`는 실제 설치 플러그인의 충돌 거부와 명령·메모리 경계 조건의 근거를 제공합니다.
+전체 기능·실패 주입을 확인하는 `integrated` 모드에서는 먼저 같은 빌드의 플러그인·명령 체인·지도 보정 검사를 실행합니다. 각 명령의 출력은 새 디렉터리를 지정합니다.
+
+```bash
+/usr/bin/python3 tools/verify_nav_contracts.py --integrated --output reports/sim-navigation/p4-contracts
+/usr/bin/python3 tools/verify_sim_navigation.py --scenario integrated --output reports/sim-navigation/p4-integrated
+```
+
+특정 실행 기록을 사용할 때는 두 검증기의 `--build-manifest`와 주행 검증기의 `--validation-manifest`에 파일 경로를 전달합니다. 주행 검증기는 시뮬레이터 시작 전에 소스·설치 파일의 지문과 필요한 계약 결과를 확인합니다. 속도 검사는 각 명령 단계의 선속도·각속도를 기록하고, 최종 Gazebo 입력은 실행 중인 베이스의 좌우 바퀴 반경·윤거·RPM 한도로 판정합니다.
 
 각 결과 디렉터리의 `manifest.json`, `results.json`, `metrics.json`, `events.jsonl`, 로그와 경로 그림이 판정 근거입니다. 완료 결과를 덮어쓰지 않고 새 output 경로를 사용합니다. 실패 기록을 보존하고, 이전 실행의 성공을 합쳐 연속 5회 성공으로 세지 않습니다.
 

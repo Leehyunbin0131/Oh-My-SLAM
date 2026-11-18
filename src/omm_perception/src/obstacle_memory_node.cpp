@@ -106,6 +106,8 @@ public:
     depth_sub_ = create_subscription<sensor_msgs::msg::Image>(
         "/camera/depth/image_rect_raw", depth_qos,
         [this](sensor_msgs::msg::Image::ConstSharedPtr m) {
+          if (pending_depth_ && pending_depth_->header.stamp != m->header.stamp)
+            memory_.interruptFreeEvidence();
           pending_depth_.reset();
           depth(m);
         });
@@ -121,6 +123,7 @@ private:
       info_.reset();
       imu_history_.clear();
       tracker_.reset();
+      last_floor_ = GroundPlane();
       isolated_points_.clear();
       last_stamp_ = -1.;
       last_observation_ = builtin_interfaces::msg::Time();
@@ -224,8 +227,11 @@ private:
         info_->width != msg->width || info_->height != msg->height ||
         msg->width < 8 || msg->height < 8 || !std::isfinite(info_->k[0]) ||
         !std::isfinite(info_->k[4]) || !std::isfinite(info_->k[2]) ||
-        !std::isfinite(info_->k[5]) || info_->k[0] <= 0 || info_->k[4] <= 0)
+        !std::isfinite(info_->k[5]) || info_->k[0] <= 0 || info_->k[4] <= 0) {
+      if (stamp > last_stamp_)
+        memory_.interruptFreeEvidence();
       return;
+    }
     if (stamp > now) {
       pending_depth_ = msg;
       pending_depth_received_ = received;
@@ -249,8 +255,10 @@ private:
       else if (msg->encoding == "16UC1")
         cv_bridge::toCvCopy(msg, "16UC1")
             ->image.convertTo(depth_image, CV_32FC1, .001);
-      else
+      else {
+        memory_.interruptFreeEvidence();
         return;
+      }
       auto memory_from_camera = eigenTransform(
           buffer_
               .lookupTransform(memory_frame_, msg->header.frame_id,
@@ -306,17 +314,22 @@ private:
           base_points.push_back(base_from_camera * p);
         }
       // A dead image must not turn the entire remembered scene into free space.
-      if (valid < 100 || valid < total * .05)
+      if (valid < 100 || valid < total * .05) {
+        memory_.interruptFreeEvidence();
         return;
+      }
       healthy_ = true;
+      const bool recent_floor = geometry_healthy_ && stamp - last_stamp_ < timeout_;
       last_stamp_ = stamp;
       last_observation_ = msg->header.stamp;
-      auto ground = estimateGround(base_points, up, max_slope_);
+      auto ground = estimateGround(base_points, up, max_slope_, recent_floor ? &last_floor_ : nullptr);
       geometry_healthy_ = ground.valid;
       if (!ground.valid) {
+        memory_.interruptFreeEvidence();
         status_ = "ground_not_established";
         return;
       }
+      last_floor_ = ground;
       for (const auto &b : base_points) {
         double height = ground.height(b);
         if (height < min_height_ || height > max_height_)
@@ -350,7 +363,7 @@ private:
       }
       memory_.recenter(memory_from_base.translation(), active_radius_);
       memory_.clearVisible(depth_image, k, memory_from_camera.inverse(), stamp,
-                           margin_, free_frames_, min_depth_, max_depth_);
+                           margin_, free_frames_, min_depth_, max_depth_, timeout_);
       memory_healthy_ = true;
       status_ = "ok";
       if (want_raw)
@@ -361,6 +374,7 @@ private:
       // data.
       obstacle_pub_->publish(cloud(obstacles, header));
     } catch (const std::exception &e) {
+      memory_.interruptFreeEvidence();
       if (managing_memory) {
         memory_failed_ = true;
         memory_healthy_ = false;
@@ -493,6 +507,7 @@ private:
       memory_preview_pub_->publish(cloud(preview, msg.header));
     }
   }
+  GroundPlane last_floor_;
   Memory memory_;
   Tracker tracker_;
   std::vector<Eigen::Vector3d> isolated_points_;

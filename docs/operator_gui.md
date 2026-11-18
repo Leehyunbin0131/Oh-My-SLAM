@@ -146,9 +146,19 @@ GUI 이벤트 루프가 멈추거나 연결이 끊기면 기존 0.30초 제어�
 
 지도, RGB, 깊이, 제어 상태, 계측값, 시스템 자원, 목표 목록, 로그는 각각 변경된 데이터만 화면에 알립니다. 숨긴 지도 레이어의 수신이나 카메라 갱신은 지도 다시 그리기를 요청하지 않습니다. 화면의 데이터 수명 판정은 100ms 간격으로 계속 수행하고, 사용자 입력·제어권 heartbeat의 50ms 타이머는 화면 처리와 별도로 유지합니다.
 
-지도·금지 구역은 `<지도>.keepout.json`에 저장하며 지도 YAML·이미지 해시로 결합합니다. 저장 실패로 `<지도>.keepout.pending`이 남았거나 해시가 불일치하면 불러오기를 거부합니다. 구역 파일이 없는 기존 지도는 빈 구역으로 열 수 있습니다.
+지도·금지 구역은 `<지도>.keepout.json`에 저장하며 지도 YAML·이미지 해시로 결합합니다. 저장이 끝나면 구역·이미지·그래프·메타데이터를 먼저 게시하고 지도 YAML을 마지막에 게시합니다. 중간 실패 후에는 같은 이름으로 다시 저장할 수 있습니다. 구형 저장 방식의 `<지도>.keepout.pending`이 남아 있거나 해시가 불일치하면 불러오기를 거부합니다. 구역 파일이 없는 기존 지도는 빈 구역으로 열 수 있습니다.
 
 이 변경은 메시지·인지·주행·GUI 설치본을 함께 빌드하고 세션을 재시작해야 적용됩니다. 실행 로그는 `reports/operator/`에 저장합니다.
+
+현행 콘솔 GUI를 검증하려면 작업공간 루트에서 다음 명령을 사용합니다. 일반 운용과 동일한 QML과 지도 타입을 로드합니다. 이전 진입점 `verify_operator_gui.py`도 같은 검증기를 실행합니다.
+
+```bash
+/usr/bin/python3 tools/build_operator_live.py --output reports/operator/gui-build
+source install/setup.bash
+.venv-operator/bin/python tools/verify_operator_live.py --output reports/operator/gui-run
+```
+
+시뮬레이션 주행 없이 설치한 콘솔 화면의 로드와 작업 스레드·관측 프로세스 종료만 확인하려면 새 출력 경로와 함께 `--qml-only`를 지정합니다.
 
 ## 검증 결과
 

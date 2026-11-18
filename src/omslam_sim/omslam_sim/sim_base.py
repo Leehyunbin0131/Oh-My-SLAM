@@ -35,6 +35,7 @@ class SimBase(LifecycleNode):
             self.declare_parameter(key, value)
         self.configured = False
         self.guard = SimCommandGuard()
+        self.output_moving = False
         self.last_odom_stamp = None
         self.last_odom_at = None
         self.latest_clock = None
@@ -85,7 +86,9 @@ class SimBase(LifecycleNode):
 
     def on_activate(self, state):
         now = time.monotonic()
-        if self.last_odom_stamp is None or self.latest_clock is None or not 0 <= self.latest_clock-self.last_odom_stamp < 300_000_000:
+        if (self.last_odom_at is None or not 0 <= now-self.last_odom_at < .4 or
+                self.last_odom_stamp is None or self.latest_clock is None or
+                not 0 <= self.latest_clock-self.last_odom_stamp < 300_000_000):
             self.get_logger().error('Activation requires a fresh measured wheel odometry sample')
             return TransitionCallbackReturn.FAILURE
         try:
@@ -96,7 +99,7 @@ class SimBase(LifecycleNode):
             return TransitionCallbackReturn.FAILURE
 
     def on_deactivate(self, state):
-        self.guard.deactivate(); self.output.publish(Twist())
+        self.guard.deactivate(); self.publish_velocity(0., 0.)
         return TransitionCallbackReturn.SUCCESS
 
     def on_cleanup(self, state):
@@ -110,12 +113,19 @@ class SimBase(LifecycleNode):
 
     def clock_sample(self, msg):
         ns = stamp_ns(msg.clock); now = time.monotonic()
+        rewound = self.latest_clock is not None and ns < self.latest_clock
+        was_active = self.guard.active
         if self.latest_clock is None or ns != self.latest_clock:
-            if self.latest_clock is not None and ns < self.latest_clock:
+            if rewound:
                 self.last_odom_stamp = self.last_odom_at = None
                 self.joint_telemetry = JointTelemetry()
             self.latest_clock = ns; self.clock_advanced_at = now
         self.guard.clock(ns, now)
+        if rewound and was_active:
+            self.trigger_deactivate()
+            self.guard.reason = 'clock rewound; fresh wheels and reactivation required'
+        elif self.output_moving:
+            self.check_expiry(now)
 
     def joints(self, msg):
         if not self.configured or self.latest_clock is None:
@@ -153,29 +163,40 @@ class SimBase(LifecycleNode):
         values = (t.linear.x, t.linear.y, t.linear.z, t.angular.x, t.angular.y, t.angular.z)
         return msg.header.frame_id == 'base_footprint' and all(math.isfinite(v) for v in values) and all(v == 0 for v in (t.linear.y, t.linear.z, t.angular.x, t.angular.y))
 
+    def publish_velocity(self, vx, wz):
+        msg = Twist()
+        msg.linear.x, msg.angular.z = vx, wz
+        self.output.publish(msg)
+        self.output_moving = bool(vx or wz)
+
+    def check_expiry(self, now):
+        # Release the last moving output as soon as either clock reports expiry.
+        # Only the steady 50 Hz control timer publishes nonzero commands.
+        if not any(self.guard.sample(now)) and self.output_moving:
+            self.publish_velocity(0., 0.)
+
     def requested(self, msg):
-        now = time.monotonic(); self.guard.sample(now)
+        now = time.monotonic(); self.check_expiry(now)
         if not self.configured or not self.guard.active or self.guard.suspended: return
         if not self.valid(msg): self.guard.gate.target = None; return
         self.guard.requested(stamp_ns(msg.header.stamp), now)
 
     def final(self, msg):
-        now = time.monotonic(); self.guard.sample(now)
+        now = time.monotonic(); self.check_expiry(now)
         if not self.configured or not self.guard.active or self.guard.suspended: return
         if not self.valid(msg): self.guard.gate.target = None; return
         self.guard.final(stamp_ns(msg.header.stamp), msg.twist.linear.x, msg.twist.angular.z, now)
         if not msg.twist.linear.x and not msg.twist.angular.z:
-            self.output.publish(Twist())
+            self.publish_velocity(0., 0.)
 
     def tick(self):
         now = time.monotonic()
-        if (self.configured and self.guard.active and self.last_odom_stamp is not None
-                and self.latest_clock-self.last_odom_stamp > 400_000_000):
-            self.guard.deactivate()
+        if (self.configured and self.guard.active and (self.last_odom_stamp is None
+                or self.latest_clock-self.last_odom_stamp > 400_000_000)):
+            self.trigger_deactivate()
             self.guard.reason = 'wheel feedback stale; reactivation required'
         vx, wz = self.guard.sample(now) if self.configured else (0., 0.)
-        msg = Twist(); msg.linear.x = vx; msg.angular.z = wz
-        self.output.publish(msg)
+        self.publish_velocity(vx, wz)
         if self.joint_telemetry.snapshot is not None and now-self.last_motor_publish >= .05:
             published_ns = self.get_clock().now().nanoseconds
             snapshot = with_sim_target(self.joint_telemetry.snapshot,

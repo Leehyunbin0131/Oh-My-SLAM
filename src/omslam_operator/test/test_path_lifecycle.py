@@ -7,6 +7,7 @@ from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from omslam_operator_msgs.action import OperatorNavigate
+from omslam_operator_msgs.msg import OperatorState
 from omslam_operator.worker import ConsoleNode, Shared
 
 
@@ -74,6 +75,38 @@ def test_observer_without_local_goal_still_displays_paths():
     receiver, _, _, _=fixture()
     ConsoleNode.path(receiver, plan(90))
     assert receiver.s.data['path']==[(1., 0.)]
+
+
+def test_observer_uses_authoritative_goal_across_windows_and_late_samples():
+    receiver, _, requests, data = fixture()
+    receiver.last_event_signature = ''
+    def report(at, uid='', start=0, session='guard'):
+        msg = OperatorState(session_id=session, goal_id=uid, goal_stamp_ns=start*1_000_000_000)
+        msg.header.stamp = Time(sec=at)
+        ConsoleNode.operator(receiver, msg)
+    ConsoleNode.start_goal(receiver, data)
+    result = accept(requests[0])
+    ConsoleNode.path(receiver, plan(101, 1.5))
+    report(101, 'first', 100)
+    assert receiver.s.data['path'] == [(1.5, 0.)]
+    result.set_result(SimpleNamespace(result=OperatorNavigate.Result(success=True, status=4,
+                                                                       internal_goal_id='first')))
+    ConsoleNode.path(receiver, plan(102))
+    report(103)
+    ConsoleNode.path(receiver, plan(109))  # Late sample of the old goal.
+    assert receiver.s.data['path'] == []
+    ConsoleNode.path(receiver, plan(111, 2.))  # Remote plan can arrive before its goal state.
+    report(112, 'second', 110)
+    assert receiver.s.data['path'] == [(2., 0.)]
+    ConsoleNode.path(receiver, plan(109))
+    assert receiver.s.data['path'] == [(2., 0.)]
+    report(114)
+    ConsoleNode.path(receiver, plan(115))
+    report(112, 'second', 110)  # Old /operator/state must not resurrect it.
+    assert receiver.s.data['path'] == []
+    report(120, session='replacement')
+    report(121, 'from-previous-map', 118, session='guard')
+    assert receiver.s.data['operator']['session_id'] == 'replacement'
 
 
 def test_rejected_goal_clears_path_and_does_not_reopen_on_late_plan():

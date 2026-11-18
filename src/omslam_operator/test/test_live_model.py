@@ -26,6 +26,7 @@ def model():
         'reverse_allowed': False, 'linear_limit': .1, 'angular_limit': .3,
         'max_linear_velocity': .2, 'max_angular_velocity': .6, 'reason': 'ready'}
     shared.data['operator'].update(max_wheel_rpm=100., wheel_rpm_limit=50.)
+    shared.data['operator'].update(localization_mode='slam', localization_initialized=True)
     shared.data['keepouts'] = {'session_id':'guard-1','revision':0,'polygons':[]}
     shared.map_layers['map'] = {'width': 20, 'height': 20, 'resolution': .1,
                                'origin': [0., 0., 0.], 'cells': np.zeros((20, 20))}
@@ -209,6 +210,7 @@ def test_live_map_load_requires_disabled_owner_and_explicit_initial_pose(model):
     assert payload['operation'] == 'localize' and payload['token'] == model.token
     model.s.controls.clear()
     model.s.data['map_response'] = {'_request_id': payload['_request_id'], 'success': True, 'message': 'loaded'}
+    model.s.data['operator'].update(localization_mode='amcl', localization_initialized=False)
     model.tick()
     assert model._needs_initial_pose
     model.addWaypoint(.5, .5, 0.)
@@ -221,7 +223,7 @@ def test_live_map_load_requires_disabled_owner_and_explicit_initial_pose(model):
     model.s.data['map_response'] = {'_request_id': payload['_request_id'], 'success': True}
     model.tick()
     assert model._needs_initial_pose
-    model.s.data['operator']['auto_ready'] = True
+    model.s.data['operator'].update(auto_ready=True, localization_initialized=True)
     fresh(model)
     model.tick()
     assert not model._needs_initial_pose
@@ -322,15 +324,74 @@ def test_live_no_path_requires_explicit_terminal_evidence_and_clears_on_new_goal
 
 
 def test_live_amcl_reconnect_requires_map_and_missing_pose_evidence(model):
-    model.s.data['nodes'] = ['/amcl', '/map_server']
-    model.s.data['operator']['auto_ready'] = False
+    model.s.data['operator'].update(localization_mode='amcl', localization_initialized=False, auto_ready=False)
     model.refresh()
     assert model.ui['movementState'] == 'pose_required' and model.ui['needsInitialPose']
-    model.s.data['amcl_pose_seen'] = True
+    model.s.data['operator']['localization_initialized'] = True
     model.s.data['operator']['phase'] = 'BLOCKED'
     model.refresh()
     assert model.ui['movementState'] == 'blocked'
     assert not model.ui['needsInitialPose']  # Ordinary TF/health loss is not an initial-pose claim.
+
+
+def test_remote_map_replacement_and_pose_are_shared_by_all_windows(model):
+    model.addWaypoint(.5, .5, 1.)
+    model.s.map_layers['map']['revision'] = 7
+    fresh(model)
+    model.tick()
+    assert len(model.queue) == 1  # In-session online SLAM revisions preserve the route.
+    model.s.data['operator'].update(session_id='another-map', localization_mode='amcl',
+                                    localization_initialized=False, auto_ready=False)
+    fresh(model)
+    model.tick()
+    model.refresh()
+    assert not model.queue and model.ui['needsInitialPose']
+    model.startRoute()
+    assert not model.s.controls
+    model._needs_initial_pose = True  # The opening window is also waiting for initialization.
+    model.s.data['operator'].update(localization_initialized=True, auto_ready=True)
+    fresh(model)
+    model.tick()
+    model.refresh()
+    assert not model.ui['needsInitialPose']
+    model.addWaypoint(.7, .5, 0.)
+    model.startRoute()
+    reply(model)
+    reply(model, 'AUTO')
+    assert [data['x'] for data in commands(model, 'navigate')] == [.7]
+
+
+def test_refused_rpm_never_replays_after_owner_release(model):
+    model.s.data['operator'].update(owner_id='other-window', wheel_rpm_limit=10.)
+    fresh(model)
+    model.tick()
+    model.setRpmLimit(95.)
+    assert not model._speed_dirty and not model.s.controls
+    model.s.data['operator']['owner_id'] = ''
+    fresh(model)
+    model.tick()
+    model.acquireControl()
+    reply(model)
+    assert not commands(model, 'speed')
+    model.setRpmLimit(37.5)
+    assert commands(model, 'speed')[0]['wheel_rpm_limit'] == pytest.approx(37.5)
+
+
+def test_stop_before_worker_claim_finishes_only_after_measured_stop(model):
+    own(model, 'AUTO')
+    model.addWaypoint(.5, .5, 0.)
+    model.startRoute()
+    request = commands(model, 'navigate')[0]['request_id']
+    assert model.s.goal_phase == 'queued'
+    model.s.data['operator']['stopped'] = False
+    model.stop()
+    model.tick()
+    assert model.queue_waiting and model.s.data['goal_result']['request_id'] == request
+    assert [kind for kind, _ in model.s.controls] == ['stop']
+    model.s.data['operator']['stopped'] = True
+    fresh(model)
+    model.tick()
+    assert not model.queue_waiting and model.queue[0]['status'] == '취소됨'
 
 
 @pytest.mark.parametrize('percent', [25., 50., 100.])

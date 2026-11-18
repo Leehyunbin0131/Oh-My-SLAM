@@ -68,6 +68,12 @@ public:
     const bool & radius,
     const double & possible_collision_cost);
 
+  // Build once under the costmap lock. The summed-area table skips exact
+  // polygon checks only when an entire swept envelope is known to be clear.
+  void prepareLatticeFootprint(bool traverse_unknown);
+  bool hasLatticeFootprint() const {return !obstacle_sums_.empty();}
+  bool latticeSweepCollides(float x, float y, double yaw, float nx, float ny, double next_yaw);
+
   /**
    * @brief Check if in collision with costmap and footprint at pose
    * @param x X coordinate of pose to check against
@@ -128,6 +134,13 @@ protected:
   nav2_costmap_2d::Footprint unoriented_footprint_;
   float center_cost_;
   bool footprint_is_radius_{false};
+  bool containsBlockedCells(unsigned int x0, unsigned int y0, unsigned int x1, unsigned int y1) const;
+  bool bodyCollides(double wx, double wy, double yaw);
+  std::vector<uint32_t> obstacle_sums_;
+  std::vector<nav2_costmap_2d::MapLocation> polygon_, outline_;
+  std::vector<std::pair<unsigned int, unsigned int>> columns_;
+  double footprint_radius_cells_{0.0};
+  bool lattice_traverse_unknown_{false};
   std::vector<float> angles_;
   float possible_collision_cost_{-1};
   rclcpp::Logger logger_{rclcpp::get_logger("SmacPlannerCollisionChecker")};

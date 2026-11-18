@@ -24,7 +24,7 @@ import numpy as np
 from generate_p4_course import object_sdf
 from p4_geometry import compose,inverse,angle_delta,polygon,rectangle,separation,intersects,interpolate,object_bounds
 from verify_sim_robot import stamp_s,yaw,digest
-from verify_nav_contracts import package_source_hashes
+from build_navigation import DEFAULT_BUILD, DEFAULT_VALIDATION, package_source_hashes, verified_build
 
 WORKSPACE=Path(__file__).resolve().parents[1]
 ALL_CHECKS=[f'V4-{n:02d}' for n in range(1,15)]
@@ -37,6 +37,29 @@ def jsonable(value):
     if isinstance(value,np.generic): return value.item()
     if isinstance(value,Path): return str(value)
     raise TypeError(str(type(value)))
+
+
+def command_limit_evidence(events, geometry, limits):
+    """Check each velocity stage and the unsaturated kinematics at Gazebo's input."""
+    stages = {}
+    for topic in ('/cmd_vel/nav', '/cmd_vel/requested', '/cmd_vel/smoothed',
+                  '/cmd_vel/monitored', '/cmd_vel', '/sim/cmd_vel'):
+        values = np.asarray([e['velocity'] for e in events if e['topic'] == topic])
+        stage = stages[topic] = {'samples': len(values), 'passed': False}
+        if values.shape != (len(values), 6) or not len(values) or not np.isfinite(values).all():
+            continue
+        vx, wz = values[:, 0], values[:, 5]
+        half_track = geometry['wheel_separation'] / 2
+        left = (vx - half_track * wz) * (30 / math.pi) / geometry['left_radius']
+        right = (vx + half_track * wz) * (30 / math.pi) / geometry['right_radius']
+        peak_rpm = float(max(np.max(np.abs(left)), np.max(np.abs(right))))
+        peak_vx, peak_wz = float(np.max(np.abs(vx))), float(np.max(np.abs(wz)))
+        passed = (np.all(values[:, 1:5] == 0) and peak_vx <= limits['max_linear_velocity'] + 1e-6
+                  and peak_wz <= limits['max_angular_velocity'] + 1e-6)
+        if topic == '/sim/cmd_vel':
+            passed = passed and 0 < peak_rpm <= geometry['max_rpm'] + 1e-6
+        stage.update(passed=bool(passed), max_abs_vx=peak_vx, max_abs_wz=peak_wz, max_rpm=peak_rpm)
+    return stages
 
 
 def bounded_planner_evidence(entry,bt_events,states,ros_errors,marked=None,obstruction_epoch=None):
@@ -295,7 +318,8 @@ class NavigationRun:
                 '/cmd_vel/monitored':TwistStamped,'/cmd_vel':TwistStamped,'/navigation/state':String,
                 '/perception/health':PerceptionHealth,'/perception/memory':ObstacleMemory,'/perception/obstacles':PointCloud2,
                 '/map':OccupancyGrid,'/global_costmap/costmap_raw':Costmap,'/local_costmap/costmap_raw':Costmap,
-                '/plan':RosPath,'/collision_monitor_state':CollisionMonitorState,'/behavior_tree_log':BehaviorTreeLog,
+                '/unsmoothed_plan':RosPath,'/plan':RosPath,'/collision_monitor_state':CollisionMonitorState,
+                '/behavior_tree_log':BehaviorTreeLog,
                 '/navigate_to_pose/_action/status':GoalStatusArray,'/slam_toolbox/graph_visualization':MarkerArray}
         transient_topics={'/tf_static','/map','/perception/memory','/perception/health','/navigation/state',
                           '/global_costmap/costmap_raw','/local_costmap/costmap_raw','/navigate_to_pose/_action/status'}
@@ -363,26 +387,39 @@ class NavigationRun:
     def sensor_stamp(self,topic):return stamp_s(self.samples[topic][-1][1].header.stamp)
 
     def stationary(self,label,duration=.3):
-        begin=self.sim_time;initial=self.pose().copy()
-        self.wait_sim(duration)
-        values=[msg for wall,msg in self.samples['/odom'] if stamp_s(msg.header.stamp)>=begin]
-        passed=len(values)>=3 and all(abs(msg.twist.twist.linear.x)<=.01 and abs(msg.twist.twist.angular.z)<=.02 for msg in values)
-        distance=float(np.linalg.norm(self.pose()[:2]-initial[:2]))
-        self.e.detail('stationary_'+label,passed and distance<=.01,duration=duration,distance_m=distance,samples=len(values))
+        begin = self.sim_time
+        initial = self.pose().copy()
+        window = self.measure_stop(label, begin, duration, max(1., duration + .7))
+        distance = float(np.linalg.norm(self.pose()[:2] - initial[:2]))
+        self.e.detail('stationary_'+label, not window.motion_observed and distance <= .01,
+                      duration=duration, distance_m=distance, samples=window.count)
 
-    def wait_stop(self,label,start=None):
-        start=self.sim_time if start is None else start
-        deadline=time.monotonic()+6;steady=None
+    def measure_stop(self, label, start, duration, timeout):
+        from omslam_navigation.measured_stop import MeasuredStop
+        window = MeasuredStop(round(start * 1e9), duration)
+        last_receipt = -math.inf
+        deadline = time.monotonic() + max(6., timeout * 6.)
         while True:
-            msg=self.samples['/odom'][-1][1]
-            stopped=abs(msg.twist.twist.linear.x)<=.01 and abs(msg.twist.twist.angular.z)<=.02
-            steady=self.sim_time if stopped and steady is None else steady if stopped else None
-            if steady is not None and self.sim_time-steady>=.3:break
-            if self.sim_time-start>1.0 or time.monotonic()>deadline:
-                raise AssertionError(label+' failed measured stop within 1 second')
+            for wall, msg in self.samples['/odom']:
+                if wall > last_receipt:
+                    window.observe(msg, wall)
+                    last_receipt = wall
+            if window.confirmed(round(self.sim_time * 1e9), time.monotonic()):
+                if (window.last_ns - window.after_ns) * 1e-9 <= timeout:
+                    return window
+            if self.sim_time - start > timeout or time.monotonic() > deadline:
+                raise AssertionError(f'{label}: no fresh measured stop within {timeout:g} seconds')
             self.pump()
-        entry={'label':label,'trigger_time':start,'settled_time':self.sim_time,'duration_s':self.sim_time-start}
-        self.metrics['stops'].append(entry);self.event('measured_stop',**entry)
+
+    def wait_stop(self, label, start=None):
+        start = self.sim_time if start is None else start
+        window = self.measure_stop(label, start, .3, 1.)
+        settled = window.last_ns * 1e-9
+        entry = {'label': label, 'trigger_time': start, 'settled_time': settled,
+                 'duration_s': settled-start, 'samples': window.count,
+                 'first_stop_stamp_ns': window.first_ns, 'last_stop_stamp_ns': window.last_ns}
+        self.metrics['stops'].append(entry)
+        self.event('measured_stop', **entry)
         return entry
 
     def parameter(self,node,names):
@@ -406,6 +443,11 @@ class NavigationRun:
                   'collision_monitor':{'enable_stamped_cmd_vel':True}}
         observed={node:self.parameter(node,list(values)) for node,values in expected.items()}
         self.e.detail('I0.actual_plugin_parameters',all(observed[node]==values for node,values in expected.items()),parameters=observed)
+        self.drive_geometry = self.parameter('sim_base', ['left_radius', 'right_radius', 'wheel_separation', 'max_rpm'])
+        self.drive_limits = self.parameter('navigation_guard', ['max_linear_velocity', 'max_angular_velocity'])
+        self.e.detail('I0.drive_limits', all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+                      for v in (*self.drive_geometry.values(), *self.drive_limits.values())),
+                      geometry=self.drive_geometry, limits=self.drive_limits)
         dumps={}
         for node in ('planner_server','controller_server','velocity_smoother','collision_monitor','bt_navigator',
                      'global_costmap/global_costmap','local_costmap/local_costmap','navigation_guard','obstacle_memory'):
@@ -429,8 +471,6 @@ class NavigationRun:
         self.e.detail('I0.qos_and_command_ownership',not incompat and endpoints['/cmd_vel']['publishers']==['navigation_guard']
                       and endpoints['/sim/ground_truth']['subscribers']==[self.node.get_name()],endpoints=endpoints,incompatible=incompat)
         self.authority('slam_toolbox' if self.mode=='slam' else 'amcl')
-        build=json.loads((WORKSPACE/'reports/sim-navigation/latest_build.json').read_text())
-        self.e.detail('I0.latest_built_sources',build['exit_code']==0 and build['source_sha256']==package_source_hashes())
         names=('omslam_navigation','omslam_navigation_contracts','nav2_smac_planner','omslam_sim','omslam_description','omslam_base',
                'omslam_localization','omslam_mapping','omm_perception','omm_perception_msgs','omm_costmap_layers')
         prefixes={name:str(Path(get_package_prefix(name)).resolve()) for name in names}
@@ -454,7 +494,7 @@ class NavigationRun:
         files={str(p):digest(p) for name in names for p in Path(prefixes[name]).rglob('*') if p.is_file() and p.suffix in ('.py','.yaml','.xml','.json','.so','.sdf')}
         manifest={'source_sha256':package_source_hashes(),'installed_sha256':files,'prefixes':prefixes,
                   'planner_processes':planner_processes,
-                  'build_manifest':str(WORKSPACE/'reports/sim-navigation/latest_build.json'),'course_sha256':digest(WORKSPACE/'tools/p4_course.json'),
+                  'build_manifest':str(self.build_manifest),'course_sha256':digest(WORKSPACE/'tools/p4_course.json'),
                   'domain':os.environ['ROS_DOMAIN_ID'],'gz_partition':os.environ['GZ_PARTITION'],'verifier_sha256':digest(__file__)}
         (self.e.directory/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
         nav=Path(get_package_share_directory('omslam_navigation'));lattice=nav/'config/lattice/diff_5cm_16h_r0p5.json'
@@ -1130,21 +1170,17 @@ class NavigationRun:
                          interpretation='Raw physical envelope against all active obstacles throughout the five-goal drive' if physical_only else
                          'Raw physical envelope against all active obstacles for motion; padded Nav2 footprint against static and already marked obstacles for each plan timestamp')
         if 'V4-04' in wanted:
-            commands=[e for e in self.command_events if e['topic']!='/sim/cmd_vel']
-            velocities=np.array([e['velocity'] for e in commands])
-            rpm=np.column_stack(((velocities[:,0]-.24*velocities[:,5])/.068*30/math.pi,
-                                 (velocities[:,0]+.24*velocities[:,5])/.068*30/math.pi))
-            self.e.check('V4-04',len(commands)>10 and np.all(np.isfinite(velocities)) and np.all(velocities[:,1:5]==0)
-                         and float(np.max(np.abs(rpm)))<=95+1e-6,commands=len(commands),max_rpm=float(np.max(np.abs(rpm))),
-                         max_vx=float(np.max(velocities[:,0])),max_abs_wz=float(np.max(np.abs(velocities[:,5]))))
-        validation_path=WORKSPACE/'reports/sim-navigation/latest_validation.json'
-        validation=json.loads(validation_path.read_text()) if validation_path.exists() else {}
-        contracts=validation.get('contracts',{})
-        current=validation.get('source_sha256')==package_source_hashes()
+            stages = command_limit_evidence(self.command_events, self.drive_geometry, self.drive_limits)
+            self.e.check('V4-04', all(stage['passed'] for stage in stages.values()), stages=stages,
+                         max_rpm=stages['/sim/cmd_vel'].get('max_rpm'), geometry=self.drive_geometry,
+                         command_limits=self.drive_limits)
+        validation = self.validation
+        validation_path = self.validation_manifest
+        contracts = validation.get('checks', {})
         if 'V4-05' in wanted:
             corridor=[p for p in self.trajectory if 1.5<=p['world'][0]<=3.5 and abs(p['world'][1])<.4]
             crossed=bool(corridor) and min(p['world'][0] for p in corridor)<1.6 and max(p['world'][0] for p in corridor)>3.4
-            self.e.check('V4-05',crossed and current and contracts.get('P0.7.actual_plugins',{}).get('status')=='PASS',
+            self.e.check('V4-05',crossed and contracts.get('P0.7.actual_plugins',{}).get('status')=='PASS',
                          corridor_samples=len(corridor),actual_plugin_fixture=contracts.get('P0.7.actual_plugins'),validation=str(validation_path))
         if 'V4-06' in wanted:
             self.e.check('V4-06',bool(self.metrics.get('cancel')) and self.metrics['cancel']['status']==5
@@ -1156,12 +1192,12 @@ class NavigationRun:
             source={e['stamp'] for e in self.command_events if e['topic']=='/cmd_vel/requested'}
             final=[e for e in self.command_events if e['topic']=='/cmd_vel' and any(e['velocity'])]
             matching=all(e['stamp'] in source and e['frame']=='base_footprint' for e in final)
-            self.e.check('V4-11',bool(final) and matching and current and probe.get('status')=='PASS',
+            self.e.check('V4-11',bool(final) and matching and probe.get('status')=='PASS',
                          nonzero_finals=len(final),all_original_stamps_preserved=matching,isolated_chain_evidence=probe)
         if 'V4-12' in wanted:
             tests=validation.get('tests',{})
             preserved=len(self.metrics['faults'])==2 and all(e['memory_before']>0 and e['memory_after']>0 for e in self.metrics['faults'])
-            self.e.check('V4-12',preserved and current and tests.get('status')=='PASS' and tests.get('map_correction_gate') is True,
+            self.e.check('V4-12',preserved and tests.get('status')=='PASS' and tests.get('map_correction_gate') is True,
                          fault_memory=self.metrics['faults'],boundary_tests=tests)
         if sensor_checks:self.sensor_summary()
 
@@ -1269,6 +1305,8 @@ def main():
     parser.add_argument('--output',required=True,type=Path)
     parser.add_argument('--checks')
     parser.add_argument('--baseline-results',type=Path)
+    parser.add_argument('--build-manifest', type=Path, default=DEFAULT_BUILD)
+    parser.add_argument('--validation-manifest', type=Path, default=DEFAULT_VALIDATION)
     parser.add_argument('--timeout',type=float,default=2400)
     parser.add_argument('--domain',type=int,default=176)
     args=parser.parse_args()
@@ -1282,7 +1320,35 @@ def main():
     os.environ.pop('ROS_STATIC_PEERS',None)
     os.environ['GZ_PARTITION']='omslam_p4_'+str(os.getpid());os.environ['OMSLAM_GZ_PARTITION']=os.environ['GZ_PARTITION']
     result=Evidence(args.output,checks,args.baseline_results,args.scenario);run=NavigationRun(result,args.timeout)
+    run.build_manifest = args.build_manifest.resolve()
+    run.validation_manifest = args.validation_manifest.resolve()
+    run.validation = {}
+    try:
+        build = verified_build(run.build_manifest)
+        from ament_index_python.packages import get_package_prefix
+        prefixes = {pkg: Path(get_package_prefix(pkg)).resolve() for pkg in build['packages']}
+        mismatches = {pkg: str(path) for pkg, path in prefixes.items() if path != WORKSPACE/'install'/pkg}
+        if mismatches:
+            raise ValueError(f'Source install/setup.bash from {WORKSPACE}; unexpected package prefixes: {mismatches}')
+        result.detail('I0.latest_built_sources', True, build_manifest=str(run.build_manifest))
+        result.data['source_sha256'] = build['source_sha256']
+        required = set(checks) & {'V4-05', 'V4-11', 'V4-12'}
+        if required:
+            validation = json.loads(run.validation_manifest.read_text())
+            needed = {'V4-05': 'P0.7.actual_plugins', 'V4-11': 'command_chain', 'V4-12': 'map_correction_gate'}
+            if (validation.get('build_manifest_sha256') != digest(run.build_manifest)
+                    or validation.get('source_sha256') != build['source_sha256'] or validation.get('status') != 'PASS'
+                    or not all(validation['checks'].get(needed[k], {}).get('status') == 'PASS' for k in required)):
+                raise ValueError(f'Run verify_nav_contracts.py --integrated for this build: {run.validation_manifest}')
+            run.validation = validation
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        result.data.update(status='FAIL', error={'message':str(exc)}, actual_movement=False)
+        result.save()
+        result.events.close()
+        print(f'Preflight failed before starting simulation: {exc}', flush=True)
+        return 1
     ledger=WORKSPACE/'reports/sim-navigation/drive_ledger.json'
+    ledger.parent.mkdir(parents=True, exist_ok=True)
     entries=json.loads(ledger.read_text()) if ledger.exists() else []
     entry={'run':str(result.directory),'pid':os.getpid(),'started_at':result.data['started_at'],'status':'RUNNING',
            'scenario':args.scenario,'checks':checks,'baseline':str(args.baseline_results) if args.baseline_results else None}

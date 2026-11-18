@@ -8,6 +8,45 @@ MOVE = (0.20, 0.0, 0.0, 0.0, 0.0, 0.30)
 ZERO = (0.0,) * 6
 
 
+def waiting_for_clock(offset_ns=4_000_000):
+    gate = NavigationGate()
+    gate.clock(1_000_000_000, 1.0)
+    gate.health(True, '', 1.0)
+    gate.clock(2_100_000_000, 2.1)
+    assert gate.arm(2_100_000_000, 2.1)[0]
+    gate.clock(2_200_000_000, 2.2)
+    gate.goals([('new', 2_200_000_000 + offset_ns, 2)], 2_200_000_000, 2.2)
+    return gate
+
+
+def test_accepted_goal_waits_for_clock_without_motion_or_rearming():
+    gate = waiting_for_clock()
+    assert gate.state == 'ARMED_IDLE' and not gate.motion_allowed() and not gate.cancel_required
+    assert not gate.requested(2_200_000_000, FRAME, MOVE, 2_200_000_000, 2.2)
+    assert gate.tick(2_200_000_000, 2.201) == (0., 0.)
+    gate.clock(2_204_000_000, 2.204)
+    gate.tick(2_204_000_000, 2.204)
+    assert gate.motion_allowed() and gate.goal_id == 'new'
+    assert gate.requested(2_205_000_000, FRAME, MOVE, 2_205_000_000, 2.205)
+
+
+def test_pending_clock_does_not_reopen_cancelled_expired_or_previous_goals():
+    for status in (3, 5):
+        gate = waiting_for_clock()
+        gate.goals([('new', 2_204_000_000, status)], 2_201_000_000, 2.201)
+        gate.clock(2_205_000_000, 2.205)
+        gate.tick(2_205_000_000, 2.205)
+        gate.goals([('new', 2_204_000_000, 2)], 2_205_000_000, 2.205)
+        assert not gate.motion_allowed() and gate.output == (0., 0.)
+    gate = waiting_for_clock()
+    gate.goals([('new', 2_204_000_000, 2)], 2_201_000_000, 2.28)
+    gate.tick(2_201_000_000, 2.31)
+    assert gate.state == 'FAULT_LATCHED' and gate.cancel_required
+    for offset in (101_000_000, -105_000_000):
+        gate = waiting_for_clock(offset)
+        assert gate.state == 'FAULT_LATCHED' and gate.cancel_required
+
+
 def running():
     gate = NavigationGate()
     gate.clock(1_000_000_000, 10.0)

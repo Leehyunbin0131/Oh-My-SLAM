@@ -24,7 +24,11 @@ class SimCommandGuard:
             reset = self.sim_ns is not None and stamp_ns < self.sim_ns
             self.sim_ns = stamp_ns
             self.advanced_at = now
-            if reset or self.suspended:
+            if reset:
+                self.deactivate()
+                self.suspended = False
+                self.reason = 'clock rewound; fresh wheels and reactivation required'
+            elif self.suspended:
                 self.gate.clear()
                 if self.active:
                     # A message created at the frozen clock edge is old intent.
@@ -74,7 +78,12 @@ class SimCommandGuard:
         if self.target_stamp is None or not 0 <= (self.sim_ns-self.target_stamp)*1e-9 < self.gate.TIMEOUT:
             self.gate.target = None
             return 0., 0.
-        left, right = self.geometry.rpm(vx, wz)
+        try:
+            left, right = self.geometry.rpm(vx, wz)
+        except ValueError:
+            self.gate.withdraw_target()
+            self.reason = 'invalid wheel velocity; intent discarded'
+            return 0., 0.
         vl = left*math.pi/30*self.geometry.left_radius
         vr = right*math.pi/30*self.geometry.right_radius
         self.reason = 'live intent'

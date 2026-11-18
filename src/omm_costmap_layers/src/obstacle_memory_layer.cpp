@@ -21,6 +21,14 @@ void ObstacleMemoryLayer::onInitialize() {
     throw std::invalid_argument("Invalid obstacle memory layer parameters");
   enabled_ = true;
   current_ = false;
+  rcl_jump_threshold_t threshold{};
+  threshold.on_clock_change = true;
+  threshold.min_backward.nanoseconds = -1;
+  jump_handler_ = clock_->create_jump_callback(nullptr, [this](const rcl_time_jump_t &) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot_.reset();
+    new_epoch_ = true;
+  }, threshold);
   sub_ = node->create_subscription<omm_perception_msgs::msg::ObstacleMemory>(
       "/perception/memory", rclcpp::QoS(1).transient_local(),
       [this](omm_perception_msgs::msg::ObstacleMemory::ConstSharedPtr msg) {
@@ -54,14 +62,19 @@ void ObstacleMemoryLayer::updateBounds(double, double, double, double *min_x,
 
 void ObstacleMemoryLayer::prepareProjection() {
   omm_perception_msgs::msg::ObstacleMemory::ConstSharedPtr msg;
+  const auto now = clock_->now();
+  bool reset;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    reset = new_epoch_ || now.seconds() < last_now_;
+    if (reset && !new_epoch_)
+      snapshot_.reset();
+    new_epoch_ = false;
     msg = snapshot_;
   }
-  const auto now = clock_->now();
-  if (now.seconds() < last_now_) {
-    // A new clock epoch cannot reuse occupancy in the previous odom frame.
-    // updateBounds has already included its old marks for clearing.
+  if (reset) {
+    // Old marks are already in the update bounds for clearing. The jump
+    // callback discarded messages received before the new clock epoch.
     accepted_.reset();
     transformed_.clear();
     archived_.clear();
@@ -99,6 +112,15 @@ void ObstacleMemoryLayer::prepareProjection() {
       auto transform = tf_->lookupTransform(layered_costmap_->getGlobalFrameID(),
                                             accepted_->header.frame_id,
                                             tf2::TimePointZero);
+      // A latest-time lookup returns stamp zero for an all-static chain.
+      // AMCL intentionally postdates map->odom by up to one second.
+      const auto stamp = rclcpp::Time(transform.header.stamp);
+      if (layered_costmap_->getGlobalFrameID() != accepted_->header.frame_id &&
+          stamp.nanoseconds() != 0) {
+        const double age = (now - stamp).seconds();
+        if (age > .5 || age < -1.0)
+          throw std::runtime_error("Stale or future obstacle memory transform");
+      }
       tf2::Transform tf;
       tf2::fromMsg(transform.transform, tf);
       if (!std::isfinite(tf.getOrigin().x()) || !std::isfinite(tf.getOrigin().y()) ||

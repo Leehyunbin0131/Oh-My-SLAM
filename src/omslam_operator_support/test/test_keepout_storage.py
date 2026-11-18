@@ -1,4 +1,5 @@
 """Save exactly the current map's zones and keep source bundles intact."""
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -88,6 +89,8 @@ def test_amcl_save_command_does_not_launch_slam_saver(tmp_path):
         authorize=lambda _: None, stop_and_confirm=lambda: None,
         keepout_snapshot=lambda: ('session', 3, ZONES))
     req = MapCommand.Request(operation='save', path=str(tmp_path / 'saved'))
+    context.map_reservation = lambda _, **kwargs: nullcontext(lambda: None)
+    context.save_reserved = lambda *args: MapSupport.save_reserved(context, *args)
     result = MapSupport.command(context, req, MapCommand.Response())
     assert result.success, result.message
     assert len(result.paths) == 2
@@ -107,16 +110,93 @@ def test_invalid_saved_sidecar_rejects_mode_switch_before_stop(tmp_path):
     assert not result.success and not calls
 
 
-def test_changed_zones_during_save_leave_rejected_incomplete_bundle(tmp_path):
+def test_changed_zones_during_save_leave_same_prefix_available(tmp_path):
     source = bundle(tmp_path / 'source.yaml')
     snapshots = iter([('session', 3, ZONES), ('session', 4, [])])
     context = SimpleNamespace(busy=threading.Lock(), root=tmp_path, loaded_map_path=source,
         authorize=lambda _: None, stop_and_confirm=lambda: None,
         keepout_snapshot=lambda: next(snapshots))
-    result = MapSupport.command(context,
-        MapCommand.Request(operation='save', path=str(tmp_path / 'saved')), MapCommand.Response())
-    assert not result.success
-    assert (tmp_path / 'saved.yaml').exists()
-    assert (tmp_path / 'saved.keepout.pending').exists()
-    with pytest.raises(ValueError, match='incomplete'):
-        validate_map_bundle(tmp_path / 'saved.yaml')
+    context.map_reservation = lambda _, **kwargs: nullcontext(lambda: None)
+    context.save_reserved = lambda *args: MapSupport.save_reserved(context, *args)
+    request = MapCommand.Request(operation='save', path=str(tmp_path / 'saved'))
+    result = MapSupport.command(context, request, MapCommand.Response())
+    assert not result.success and not list(tmp_path.glob('saved.*'))
+    context.keepout_snapshot = lambda: ('session', 4, [])
+    assert MapSupport.command(context, request, MapCommand.Response()).success
+    assert load_keepout_file(tmp_path / 'saved.keepout.json') == []
+
+
+def test_guard_reserves_save_across_two_consoles_and_emergency_stop(tmp_path, monkeypatch):
+    import time
+    from lifecycle_msgs.msg import State
+    from std_srvs.srv import Trigger
+    from omslam_navigation.operator_control import OperatorControl
+    from omslam_navigation.operator_core import OperatorGate
+    from omslam_operator_msgs.msg import OperatorState
+    from omslam_operator_msgs.srv import Control
+
+    now = 100_000_000_000
+    guard = OperatorControl.__new__(OperatorControl)
+    guard.node = SimpleNamespace(now_ns=lambda: now, publish_zero=lambda: None,
+        states={'sim_base': [State.PRIMARY_STATE_INACTIVE]}, base_transition=None)
+    guard.core, guard.completed, guard.inflight = OperatorGate(), {}, {}
+    guard.waiters, guard.pending, guard.map_reservation = [], None, None
+    guard.report = lambda *args: None
+    def stationary():
+        wall = time.monotonic()
+        samples = [(now-350_000_000, wall-.35)] if guard.core.clock_ns is None else []
+        for stamp, received in [*samples, (now, wall)]:
+            guard.core.clock(stamp, received)
+            for source in ('wheel', 'odom'):
+                guard.core.sample_stop(source, stamp, 0., 0., True, received)
+            guard.core.stopped(stamp, received)
+    def complete(coroutine):
+        with pytest.raises(StopIteration) as ended:
+            coroutine.send(None)
+        return ended.value.value
+    def acquire(name, key):
+        return complete(guard.control(Control.Request(command='acquire', owner_id=name,
+                                        request_id=key), Control.Response()))
+    first = acquire('A', 'first')
+    assert first.success and guard.authorized(first.token, first.epoch)
+    context = MapSupport.__new__(MapSupport)
+    context.busy, context.root = threading.Lock(), tmp_path
+    context.loaded_map_path = bundle(tmp_path / 'source.yaml')
+    context.args, context.control, context.stop_client = SimpleNamespace(real=False), 'control', 'stop'
+    context.state = OperatorState(session_id='guard', stopped=True, base_active=False)
+    context.keepout_snapshot = lambda: ('guard', 2, ZONES)
+    def call(endpoint, request, timeout=12.):
+        if endpoint == 'control':
+            response = complete(guard.control(request, Control.Response()))
+        else:
+            operation = guard.stop(request, Trigger.Response())
+            operation.send(None)
+            assert not acquire('B', 'during-stop').success
+            stationary()
+            guard.tick(now, time.monotonic())
+            response = complete(operation)
+            context.state_at = time.monotonic()
+        if not response.success:
+            raise RuntimeError(response.message)
+        return response
+    context.call = call
+    call('stop', Trigger.Request())  # A stop without any map reservation also rejects acquire.
+    assert not acquire('A', 'first').success
+    first = acquire('A', 'new-owner')
+    assert first.success and guard.authorized(first.token, first.epoch)
+    called = []
+    def copy_during_save(source, destination, reserved=False):
+        assert context.busy.locked() and not acquire('B', 'during-save').success
+        call('stop', Trigger.Request())  # A global stop still works while saving.
+        assert not acquire('B', 'after-emergency-stop').success
+        called.append(True)
+        return copy_localization_map(source, destination, reserved)
+    monkeypatch.setattr('omslam_operator_support.session.copy_localization_map', copy_during_save)
+    request = MapCommand.Request(operation='save', path=str(tmp_path/'saved'), session_id='A',
+                                 token=first.token, epoch=first.epoch)
+    saved = context.command(request, MapCommand.Response())
+    assert saved.success and called == [True], saved.message
+    assert not acquire('A', 'first').success  # Do not replay an expired successful acquire.
+    second = acquire('B', 'after-save')
+    assert second.success and guard.authorized(second.token, second.epoch)
+    assert load_keepout_file(saved.paths[1]) == ZONES

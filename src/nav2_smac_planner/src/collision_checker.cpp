@@ -13,6 +13,7 @@
 // limitations under the License. Reserved.
 
 #include "nav2_smac_planner/collision_checker.hpp"
+#include "nav2_smac_planner/path_validation.hpp"
 #include "nav2_smac_planner/utils.hpp"
 
 namespace nav2_smac_planner
@@ -100,6 +101,109 @@ void GridCollisionChecker::setFootprint(
   }
 
   unoriented_footprint_ = footprint;
+}
+
+void GridCollisionChecker::prepareLatticeFootprint(bool traverse_unknown)
+{
+  obstacle_sums_.clear();
+  if (footprint_is_radius_) {return;}
+  lattice_traverse_unknown_ = traverse_unknown;
+  footprint_radius_cells_ = 0.0;
+  for (const auto & p : unoriented_footprint_) {
+    footprint_radius_cells_ = std::max(
+      footprint_radius_cells_, std::hypot(p.x, p.y) / costmap_->getResolution());
+  }
+  const size_t width = costmap_->getSizeInCellsX(), height = costmap_->getSizeInCellsY();
+  const size_t stride = width + 1;
+  obstacle_sums_.resize(stride * (height + 1), 0);
+  const auto * costs = costmap_->getCharMap();
+  for (size_t y = 0; y < height; ++y) {
+    uint32_t row = 0;
+    for (size_t x = 0; x < width; ++x) {
+      const auto cell = costs[y * width + x];
+      if (cell == OCCUPIED || (cell == UNKNOWN && !traverse_unknown)) {++row;}
+      obstacle_sums_[(y + 1) * stride + x + 1] = obstacle_sums_[y * stride + x + 1] + row;
+    }
+  }
+}
+
+bool GridCollisionChecker::containsBlockedCells(
+  unsigned int x0, unsigned int y0, unsigned int x1, unsigned int y1) const
+{
+  const size_t stride = static_cast<size_t>(costmap_->getSizeInCellsX()) + 1;
+  const size_t right = static_cast<size_t>(x1) + 1;
+  const size_t upper = static_cast<size_t>(y0) * stride, lower = (static_cast<size_t>(y1) + 1) * stride;
+  return obstacle_sums_[lower + right] - obstacle_sums_[upper + right] !=
+         obstacle_sums_[lower + x0] - obstacle_sums_[upper + x0];
+}
+
+bool GridCollisionChecker::bodyCollides(double wx, double wy, double yaw)
+{
+  const double c = std::cos(yaw), s = std::sin(yaw);
+  unsigned int min_x = costmap_->getSizeInCellsX(), min_y = costmap_->getSizeInCellsY();
+  unsigned int max_x = 0, max_y = 0;
+  polygon_.clear();
+  for (const auto & p : unoriented_footprint_) {
+    nav2_costmap_2d::MapLocation cell;
+    if (!costmap_->worldToMap(wx + p.x * c - p.y * s, wy + p.x * s + p.y * c, cell.x, cell.y)) {
+      return true;
+    }
+    min_x = std::min(min_x, cell.x); max_x = std::max(max_x, cell.x);
+    min_y = std::min(min_y, cell.y); max_y = std::max(max_y, cell.y);
+    polygon_.push_back(cell);
+  }
+  if (polygon_.size() < 3) {return true;}
+  if (!containsBlockedCells(min_x, min_y, max_x, max_y)) {return false;}
+
+  // Costmap2D::convexFillCells fills between outline extremes in each column.
+  // Use the same rasterized outline and count blocked cells across each whole
+  // span, without sorting and materializing the filled polygon for each sample.
+  outline_.clear();
+  costmap_->polygonOutlineCells(polygon_, outline_);
+  columns_.assign(max_x - min_x + 1, {costmap_->getSizeInCellsY(), 0u});
+  for (const auto & cell : outline_) {
+    auto & span = columns_[cell.x - min_x];
+    span.first = std::min(span.first, cell.y);
+    span.second = std::max(span.second, cell.y);
+  }
+  for (unsigned int x = min_x; x <= max_x; ++x) {
+    const auto & span = columns_[x - min_x];
+    if (span.first <= span.second && containsBlockedCells(x, span.first, x, span.second)) {return true;}
+  }
+  return false;
+}
+
+bool GridCollisionChecker::latticeSweepCollides(
+  float x, float y, double yaw, float nx, float ny, double next_yaw)
+{
+  if (obstacle_sums_.empty()) {return false;}
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(yaw) ||
+    !std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(next_yaw)) {return true;}
+  // One extra cell covers roundoff in continuous grid-to-world conversion.
+  const double r = footprint_radius_cells_ + 1.0;
+  const double x0 = std::floor(std::min(x, nx) - r), x1 = std::floor(std::max(x, nx) + r);
+  const double y0 = std::floor(std::min(y, ny) - r), y1 = std::floor(std::max(y, ny) + r);
+  const bool clear_body = x0 >= 0 && y0 >= 0 && x1 < costmap_->getSizeInCellsX() &&
+    y1 < costmap_->getSizeInCellsY() && !containsBlockedCells(x0, y0, x1, y1);
+  const auto start = getWorldCoords(x, y, costmap_).position;
+  const auto end = getWorldCoords(nx, ny, costmap_).position;
+  const double dx = end.x - start.x, dy = end.y - start.y;
+  const double dyaw = angles::shortest_angular_distance(yaw, next_yaw);
+  const double travel_cells = std::hypot(dx, dy) / costmap_->getResolution() +
+    footprint_radius_cells_ * std::abs(dyaw);
+  const size_t samples = static_cast<size_t>(std::max(1.0, std::ceil(2.0 * travel_cells)));
+  for (size_t i = 0; i <= samples; ++i) {
+    const double t = static_cast<double>(i) / samples;
+    const double wx = start.x + t * dx, wy = start.y + t * dy;
+    unsigned int mx, my;
+    if (!costmap_->worldToMap(wx, wy, mx, my)) {return true;}
+    const auto center = costmap_->getCost(mx, my);
+    if (center == INSCRIBED || center == OCCUPIED || (center == UNKNOWN && !lattice_traverse_unknown_)) {
+      return true;
+    }
+    if (!clear_body && bodyCollides(wx, wy, yaw + t * dyaw)) {return true;}
+  }
+  return false;
 }
 
 bool GridCollisionChecker::inCollision(

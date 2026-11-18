@@ -40,13 +40,13 @@ controller_server:
     progress_checker_plugins: [progress_checker]
     goal_checker_plugins: [goal_checker]
     progress_checker:
-      plugin: nav2_controller::PoseProgressChecker
+      plugin: omslam_navigation::SpeedAwareProgressChecker
     goal_checker:
       plugin: nav2_controller::StoppedGoalChecker
-      stateful: true
+      stateful: false
     FollowPath:
       plugin: dwb_core::DWBLocalPlanner
-      trajectory_generator_name: dwb_plugins::StandardTrajectoryGenerator
+      trajectory_generator_name: omslam_navigation::SpeedAwareTrajectoryGenerator
       critics: [ObstacleFootprint, RotateToGoal, Oscillation, GoalAlign, PathAlign, PathDist, GoalDist]
       short_circuit_trajectory_evaluation: true
       stateful: true

@@ -27,6 +27,25 @@ TEST(Ground, LowObstacleTopIsNotInventedAsFloor) {
       points.push_back({x * .05, y * .05, .08});
   EXPECT_FALSE(estimateGround(points, Eigen::Vector3d::UnitZ()).valid);
 }
+TEST(Ground, BroadThreeCentimeterStepDoesNotReplaceTheFloor) {
+  for (double slope : {0., .12}) {
+    const Eigen::AngleAxisd tilt(slope, Eigen::Vector3d::UnitY());
+    std::vector<Eigen::Vector3d> points, top;
+    for (int x=0; x<50; ++x)
+      for (int y=0; y<40; ++y) {
+        const bool on_floor = x < 3 || x >= 47 || y < 3 || y >= 37;
+        auto p = tilt * Eigen::Vector3d(.5+x*.025, -.5+y*.025, on_floor ? 0. : .03);
+        points.push_back(p);
+        if (!on_floor) top.push_back(p);
+      }
+    auto floor = estimateGround(points, Eigen::Vector3d::UnitZ());
+    ASSERT_TRUE(floor.valid);
+    for (const auto &p : top)
+      ASSERT_GT(floor.height(p), .02);
+    // Observing only the raised surface supplies no current floor evidence.
+    EXPECT_FALSE(estimateGround(top, Eigen::Vector3d::UnitZ(), .35, &floor).valid);
+  }
+}
 TEST(Ground, SmallVisibleFloorPatchNearWall) {
   std::vector<Eigen::Vector3d> points;
   for (int x = 0; x < 20; ++x)

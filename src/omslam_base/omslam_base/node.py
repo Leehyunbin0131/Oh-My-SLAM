@@ -159,7 +159,7 @@ class BaseBridge(LifecycleNode):
         with self.lock:
             if not self.active: return
             if not self.valid_command(msg):
-                self.gate.target = None
+                self.gate.withdraw_target()
                 return
             self.gate.requested(self.stamp(msg),self.get_clock().now().nanoseconds,time.monotonic())
 
@@ -167,7 +167,7 @@ class BaseBridge(LifecycleNode):
         with self.lock:
             if not self.active: return
             if not self.valid_command(msg):
-                self.gate.target = None
+                self.gate.withdraw_target()
                 return
             self.gate.final(self.stamp(msg),msg.twist.linear.x,msg.twist.angular.z,
                             self.get_clock().now().nanoseconds,time.monotonic())
@@ -197,7 +197,7 @@ class BaseBridge(LifecycleNode):
 
     def worker(self):
         client = drive = None
-        last_target = None
+        target = last_target = generation = None
         try:
             if self.backend == 'serial':
                 calibration = load_control_module('drive_calibration').DriveCalibration.load(self.value('drive_calibration'))
@@ -209,11 +209,25 @@ class BaseBridge(LifecycleNode):
                 def sample_callback(sample):
                     with self.lock:
                         self.raw_motor_receipt = (sample['stamp'], self.get_clock().now().nanoseconds)
+                        if sample.get('fault') and not self.error:
+                            self.fail(f"MCU fault {sample['fault']}: {sample.get('fault_reason', '')}")
                     counts = calibration.wheel_data(sample)
                     self.ingest(sample['stamp'], counts['left']['count'],counts['right']['count'],sample['received_at'])
                 acknowledgements = AckObservation()
                 parent = self
                 class SnapshotClient(load_control_module('motor_link').MotorClient):
+                    def set_speed(client, left, right, **kwargs):
+                        # ARM may have blocked while the executor accepted a stop.
+                        # Serialize this bounded serial write with gate mutations;
+                        # status polls and the ARM acknowledgement stay outside.
+                        with parent.lock:
+                            if (left or right) and (
+                                    not parent.active or parent.error or
+                                    generation != parent.gate.generation or
+                                    target != parent.gate.current(time.monotonic())):
+                                return None
+                            return super().set_speed(left, right, **kwargs)
+
                     # MotorClient.command() also calls this override. Capture
                     # before it consumes ACKs; no executor accesses the client.
                     def poll(client, *, block=True):
@@ -236,7 +250,7 @@ class BaseBridge(LifecycleNode):
                 client.__enter__()
                 settings.configure(client)
                 drive = load_control_module('wheel_drive').WheelDrive(client,settings)
-                with self.lock: self.ready=True
+                with self.lock: self.ready=not self.error
             disabled = False
             while not self.exit_event.is_set():
                 if client: client.poll(block=False)
@@ -246,10 +260,11 @@ class BaseBridge(LifecycleNode):
                     if self.last_ros is not None and ros_now < self.last_ros:
                         self.fail('ROS clock reversed; reconfigure required')
                     self.last_ros=ros_now
-                    if self.received_at is not None and now-self.received_at > .4:
+                    if not self.error and self.received_at is not None and now-self.received_at > .4:
                         self.fail('Encoder feedback timed out')
                     target = self.gate.current(now) if self.active and not self.error else None
                     active=self.active
+                    generation = self.gate.generation
                 if target is None:
                     if not disabled and drive: drive.disable()
                     disabled=True; last_target=None
@@ -265,7 +280,11 @@ class BaseBridge(LifecycleNode):
                     # Mirror the minimum wire lease rule for mock diagnostics.
                     if remaining < .1 and not any(rpms): rpms=(0.,0.); remaining=0.
                     with self.lock:
-                        if self.active: self.output=[*rpms,max(0.,remaining)]
+                        if (self.active and self.gate.generation == generation and
+                                self.gate.current(time.monotonic()) == target):
+                            self.output=[*rpms,max(0.,remaining)]
+                        else:
+                            self.output=[0.,0.,0.]
                     disabled=False; last_target=target
                 self.exit_event.wait(.01)
         except Exception as exc:

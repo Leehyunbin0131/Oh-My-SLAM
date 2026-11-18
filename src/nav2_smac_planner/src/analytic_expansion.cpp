@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <vector>
 #include <memory>
+#include <type_traits>
 
 #include "nav2_smac_planner/analytic_expansion.hpp"
 
@@ -295,6 +296,28 @@ typename AnalyticExpansion<NodeT>::AnalyticExpansionNodes AnalyticExpansion<Node
     return AnalyticExpansionNodes();
   }
 
+  if constexpr (std::is_same_v<NodeT, NodeLattice>) {
+    // A low inflation cost at the centre does not guarantee that the body
+    // is clear of unknown cells. Test the actual discretized shortcut and
+    // its swept footprint before committing the search to this branch.
+    // A rejected shortcut leaves the queue available to explore alternatives.
+    if (_collision_checker->hasLatticeFootprint()) {
+      Coordinates previous = node->pose;
+      const auto blocked = [&](const Coordinates & next) {
+          const bool hit = _collision_checker->latticeSweepCollides(
+            previous.x, previous.y, NodeLattice::motion_table.getAngleFromBin(previous.theta),
+            next.x, next.y, NodeLattice::motion_table.getAngleFromBin(next.theta));
+          previous = next;
+          return hit;
+        };
+      for (const auto & entry : possible_nodes) {
+        if (entry.node->getIndex() != goal->getIndex() && blocked(entry.proposed_coords)) {
+          return AnalyticExpansionNodes();
+        }
+      }
+      if (blocked(goal->pose)) {return AnalyticExpansionNodes();}
+    }
+  }
   return possible_nodes;
 }
 

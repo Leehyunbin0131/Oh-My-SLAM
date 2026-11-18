@@ -45,9 +45,9 @@ protected:
     global.reset(); local.reset();
     buffer.reset(); pub.reset(); node.reset(); publisher.reset();
   }
-  void setTransform(double x, double yaw) {
+  void setTransform(double x, double yaw, double time_offset = 0., bool is_static = false) {
     geometry_msgs::msg::TransformStamped t;
-    t.header.stamp = node->now();
+    t.header.stamp = node->now() + rclcpp::Duration::from_seconds(time_offset);
     t.header.frame_id = "map";
     t.child_frame_id = "odom";
     t.transform.translation.x = x;
@@ -56,7 +56,7 @@ protected:
     t.transform.rotation = tf2::toMsg(q);
     // map->odom is dynamic in both SLAM and AMCL. StaticCache deliberately
     // survives Buffer::clear(), so a static fixture cannot test missing TF.
-    ASSERT_TRUE(buffer->setTransform(t, "fixture", false));
+    ASSERT_TRUE(buffer->setTransform(t, "fixture", is_static));
   }
   Snapshot sample() {
     Snapshot s;
@@ -192,11 +192,42 @@ TEST_F(MemoryLayerTest, ClockRewindClearsPreviousEpochThenAcceptsNewSnapshot) {
   EXPECT_FALSE(odom_layer->isCurrent());
   EXPECT_EQ(cost(*local, 1., 0.), nav2_costmap_2d::FREE_SPACE);
   EXPECT_EQ(cost(*global, 1., 0.), nav2_costmap_2d::FREE_SPACE);
+  ASSERT_EQ(rcl_set_ros_time_override(clock->get_clock_handle(), 10050000000LL), RCL_RET_OK);
+  local->updateMap(0, 0, 0);
+  global->updateMap(0, 0, 0);
+  EXPECT_FALSE(odom_layer->isCurrent());
+  EXPECT_FALSE(map_layer->isCurrent());
+  EXPECT_EQ(cost(*local, 1., 0.), nav2_costmap_2d::FREE_SPACE);
+  EXPECT_EQ(cost(*global, 1., 0.), nav2_costmap_2d::FREE_SPACE);
   auto fresh = sample();
   fresh.points.front().x = 1.5;
   send(fresh);
   EXPECT_TRUE(odom_layer->isCurrent());
   EXPECT_EQ(cost(*local, 1.5, 0.), nav2_costmap_2d::LETHAL_OBSTACLE);
   EXPECT_EQ(cost(*local, 1., 0.), nav2_costmap_2d::FREE_SPACE);
+}
+
+TEST_F(MemoryLayerTest, ProjectionRequiresFreshDynamicTransformAndRetainsLastMarks) {
+  send(sample());
+  ASSERT_TRUE(map_layer->isCurrent());
+  buffer->clear();
+  setTransform(.75, 0., -3.);
+  send(sample());
+  EXPECT_FALSE(map_layer->isCurrent());
+  EXPECT_TRUE(odom_layer->isCurrent());
+  EXPECT_EQ(cost(*global, 1., 0.), nav2_costmap_2d::LETHAL_OBSTACLE);
+  EXPECT_EQ(cost(*global, 1.75, 0.), nav2_costmap_2d::FREE_SPACE);
+  setTransform(.5, 0., .95);
+  send(sample());
+  EXPECT_TRUE(map_layer->isCurrent());
+  EXPECT_EQ(cost(*global, 1.5, 0.), nav2_costmap_2d::LETHAL_OBSTACLE);
+  setTransform(0., 0., 2.);
+  send(sample());
+  EXPECT_FALSE(map_layer->isCurrent());
+  buffer->clear();
+  setTransform(0., 0., -3., true);
+  send(sample());
+  EXPECT_TRUE(map_layer->isCurrent());
+  EXPECT_EQ(cost(*global, 1., 0.), nav2_costmap_2d::LETHAL_OBSTACLE);
 }
 } // namespace

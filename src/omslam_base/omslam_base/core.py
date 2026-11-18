@@ -23,8 +23,11 @@ class Geometry:
             raise ValueError('Nonfinite velocity')
         left = (vx-wz*self.separation/2)/self.left_radius*30/math.pi
         right = (vx+wz*self.separation/2)/self.right_radius*30/math.pi
+        if not math.isfinite(left) or not math.isfinite(right):
+            raise ValueError('Wheel RPM calculation overflow')
         scale = min(1., self.max_rpm/max(abs(left), abs(right), 1e-30))
-        return left*scale, right*scale
+        # Multiplication can otherwise overshoot the calibrated limit by one ULP.
+        return tuple(max(-self.max_rpm, min(self.max_rpm, rpm * scale)) for rpm in (left, right))
 
 
 class EncoderOdometry:
@@ -100,6 +103,7 @@ class CommandGate:
         self.source = None
         self.target = None
         self.stopped_stamp = -1
+        self.generation = 0
         self.activation_ns = 0
         self.active = False
 
@@ -108,8 +112,13 @@ class CommandGate:
         self.activation_ns = ros_ns
         self.active = True
 
+    def withdraw_target(self):
+        self.generation += 1
+        self.target = None
+
     def clear(self):
-        self.source = self.target = None
+        self.withdraw_target()
+        self.source = None
         self.stopped_stamp = -1
         self.active = False
 
@@ -138,7 +147,7 @@ class CommandGate:
             # Smoother timeouts and downstream stops may carry a new header.
             # Stop immediately without granting a lease, and retire every
             # intent already seen so the next tick cannot revive its target.
-            self.target = None
+            self.withdraw_target()
             self.stopped_stamp = max(
                 self.stopped_stamp, self.source[0] if self.source else -1,
                 stamp if 0 < stamp <= ros_ns else -1)

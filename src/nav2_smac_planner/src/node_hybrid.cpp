@@ -755,7 +755,8 @@ float NodeHybrid::getDistanceHeuristic(
     // Need to mirror angle if Y coordinate was mirrored
     int theta_pos;
     if (node_coords_relative.y < 0.0) {
-      theta_pos = motion_table.num_angle_quantization - node_coords_relative.theta;
+      theta_pos = (motion_table.num_angle_quantization -
+        static_cast<unsigned int>(node_coords_relative.theta)) % motion_table.num_angle_quantization;
     } else {
       theta_pos = node_coords_relative.theta;
     }

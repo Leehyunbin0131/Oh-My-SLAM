@@ -36,6 +36,8 @@ def angle_difference(a, b):
 class NavigationGate:
     """One enabled session, one action goal, and bounded original command history."""
 
+    GOAL_CLOCK_GRACE = 0.10
+
     def __init__(self, limits=None):
         self.limits = limits or Limits()
         self.state = 'DISARMED'
@@ -48,6 +50,7 @@ class NavigationGate:
         self.goal_id = None
         self.goal_stamp = 0
         self.goal_status = 0
+        self.goal_clock_deadline = None
         self.active_goals = {}
         self.retired_goals = set()
         self.sources = {}
@@ -145,6 +148,7 @@ class NavigationGate:
             self.retired_goals.add(self.goal_id)
         self.cancel_required = bool(self.active_goals)
         self.goal_id, self.goal_stamp, self.goal_status = None, 0, 0
+        self.goal_clock_deadline = None
         self._discard_commands()
         if self.state != 'FAULT_LATCHED':
             self.state, self.reason = 'DISARMED', 'disabled by request'
@@ -160,9 +164,10 @@ class NavigationGate:
         self.retired_goals.update(self.active_goals)
         self.cancel_required = bool(self.active_goals)
         self.goal_id, self.goal_stamp, self.goal_status = None, 0, 0
+        self.goal_clock_deadline = None
         self._discard_commands()
 
-    def goals(self, statuses, ros_ns):
+    def goals(self, statuses, ros_ns, wall=None):
         """Receive (UUID hex, accepted ROS timestamp, GoalStatus integer)."""
         previous = self.goal_id
         live = {uid: (stamp, status) for uid, stamp, status in statuses
@@ -180,6 +185,7 @@ class NavigationGate:
             self.cancel_required = False
         if previous and previous in terminal:
             self.goal_id, self.goal_stamp, self.goal_status = None, 0, 0
+            self.goal_clock_deadline = None
             self._discard_commands()
             if self.armed:
                 self.state, self.reason = 'ARMED_IDLE', 'goal terminal; waiting for a new goal'
@@ -196,16 +202,32 @@ class NavigationGate:
         if not live:
             return
         uid, (stamp, status) = next(iter(live.items()))
+        wall = self.clock_at if wall is None else wall
         if self.goal_id is None:
-            if uid in self.retired_goals or not self.epoch_ns < stamp <= ros_ns:
+            if (uid in self.retired_goals or stamp <= self.epoch_ns or
+                    stamp - ros_ns > self.GOAL_CLOCK_GRACE * 1e9):
                 self.fault('goal belongs to an earlier or invalid activation epoch')
                 return
             if status == 3:
                 self.retired_goals.add(uid)
                 self.cancel_required = True
                 return
-            self.goal_id, self.goal_stamp = uid, stamp
+            self.goal_id, self.goal_stamp, self.goal_status = uid, stamp, 0
             self._discard_commands()
+            if stamp > ros_ns:
+                self.goal_clock_deadline = wall + self.GOAL_CLOCK_GRACE
+        if self.goal_clock_deadline is not None and status != 3:
+            if wall >= self.goal_clock_deadline:
+                self.fault('goal acceptance timestamp did not catch up with the clock')
+                return
+            if ros_ns < self.goal_stamp:
+                self.goal_status = 1
+                self.reason = 'waiting for the goal acceptance clock tick'
+                return
+        self.goal_clock_deadline = None
+        if self.goal_status == 3 and status in (1, 2):
+            # A late EXECUTING snapshot cannot reopen a canceled goal.
+            return
         self.goal_status = status
         if status == 3:
             self._discard_commands()
@@ -321,6 +343,10 @@ class NavigationGate:
     def tick(self, ros_ns, wall):
         if self.armed and not self.clock_fresh(wall):
             self.fault('simulation clock paused or stalled')
+        if self.goal_clock_deadline is not None:
+            uid = self.goal_id
+            stamp, status = self.active_goals[uid]
+            self.goals([(uid, stamp, status)], ros_ns, wall)
         if self.motion_allowed() and self.latest_source:
             latest = self.sources.get(self.latest_source)
             if latest is None or not self._live(latest, ros_ns, wall):

@@ -13,6 +13,10 @@ def setup(context):
     get = lambda key: LaunchConfiguration(key).perform(context)
     share = Path(get_package_share_directory('omslam_sim'))
     localization = Path(get_package_share_directory('omslam_localization'))
+    world = get('world')
+    if world not in ('airport', 'p4_course'):
+        raise ValueError(f'Unsupported simulator world: {world}')
+    spawn_x = get('x') or ('-108.0' if world == 'airport' else '0.0')
     urdf = simulation_urdf()
     airport = IncludeLaunchDescription(PythonLaunchDescriptionSource(str(share/'launch/airport.launch.py')),
         launch_arguments={key:get(key) for key in ('world','gui','pedestrians','gui_renderer','verbosity')} .items())
@@ -23,7 +27,7 @@ def setup(context):
              parameters=[{'robot_description':urdf, 'use_sim_time':True}], output='screen'),
         Node(package='ros_gz_sim', executable='create', name='spawn_robot', output='screen',
              arguments=['-world',get('world'),'-name','oh_my_mobilerobot','-topic','/robot_description',
-                        '-x',get('x'),'-y',get('y'),'-z','0.015','-Y',get('yaw')]),
+                        '-x',spawn_x,'-y',get('y'),'-z','0.015','-Y',get('yaw')]),
         Node(package='ros_gz_bridge', executable='parameter_bridge', name='robot_sensor_bridge',
              parameters=[{'config_file':str(share/'config/robot_bridge.yaml'),'use_sim_time':True}], output='screen',
              remappings=[('/scan','/sim/sensors/scan'),
@@ -41,6 +45,6 @@ def setup(context):
 
 def generate_launch_description():
     defaults = {'world':'airport','fault_relay':'false','gui':'true','pedestrians':'true','gui_renderer':'ogre','verbosity':'2',
-                'x':'-108.0','y':'0.0','yaw':'0.0'}
+                'x':'','y':'0.0','yaw':'0.0'}
     return LaunchDescription([DeclareLaunchArgument(k,default_value=v) for k,v in defaults.items()]
                              + [OpaqueFunction(function=setup)])

@@ -170,3 +170,44 @@ TEST(Memory, BatchArchiveReloadPreservesEveryBindingAndRepeatedFreeVotes) {
   EXPECT_EQ(m.archivedCount(), 0u);
   EXPECT_EQ(m.cleared(), points.size());
 }
+
+TEST(Memory, ArchivedFreeVotesRequireConsecutiveCameraFramesAfterReturn) {
+  Memory m(.05, 1);
+  m.observe({{0, 0, 2}}, 1.);
+  for (int i=1; i<=4; ++i) clear(m, image(3), 1.+i*.1);
+  m.recenter({20, 0, 0}, 1.);
+  Eigen::Isometry3d away = Eigen::Isometry3d::Identity();
+  away.translation().x() = -20.;
+  for (int i=0; i<20; ++i) clear(m, image(3), 2.+i*.1, away);
+  m.recenter({0, 0, 0}, 1.);
+  ASSERT_EQ(m.voxels().size(), 1u);
+  EXPECT_EQ(m.voxels().begin()->second.free_frames, 0);
+  for (int i=0; i<4; ++i) {
+    clear(m, image(3), 4.+i*.1);
+    ASSERT_EQ(m.voxels().size(), 1u);
+    EXPECT_EQ(m.voxels().begin()->second.free_frames, i+1);
+  }
+  clear(m, image(3), 4.4);
+  EXPECT_TRUE(m.voxels().empty());
+}
+TEST(Memory, CameraTimeoutInterruptsActiveFreeVotes) {
+  Memory m(.05, 1);
+  m.observe({{0, 0, 2}}, 1.);
+  auto observe_free = [&](double t) {
+    m.clearVisible(image(3), k, Eigen::Isometry3d::Identity(), t, .1, 5, .12, 5., .3);
+  };
+  for (int i=1; i<=4; ++i) observe_free(1.+i*.1);
+  observe_free(10.);
+  ASSERT_EQ(m.voxels().size(), 1u);
+  EXPECT_EQ(m.voxels().begin()->second.free_frames, 1);
+}
+TEST(Memory, ArchiveReloadFiltersCircleBeforeCapacityLimit) {
+  Memory m(.05, 1);
+  m.recenter({20, 0, 0}, 1.);
+  m.observe({{-.9, -.9, 2.}, {.2, 0, 2.}}, 1.);
+  ASSERT_EQ(m.archivedCount(), 2u);
+  m.recenter({0, 0, 0}, 1.);
+  ASSERT_EQ(m.voxels().size(), 1u);
+  EXPECT_DOUBLE_EQ(m.voxels().begin()->second.point.x(), .2);
+  EXPECT_EQ(m.archivedCount(), 1u);
+}

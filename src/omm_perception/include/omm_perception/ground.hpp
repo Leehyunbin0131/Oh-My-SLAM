@@ -12,5 +12,6 @@ struct GroundPlane {
   }
 };
 GroundPlane estimateGround(const std::vector<Eigen::Vector3d> &points,
-                           const Eigen::Vector3d &up, double max_slope = .35);
+                           const Eigen::Vector3d &up, double max_slope = .35,
+                           const GroundPlane *previous = nullptr);
 } // namespace omm_perception

@@ -1,4 +1,5 @@
 """Prevent map operations from mutating a running or unowned session."""
+from contextlib import nullcontext
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -29,7 +30,8 @@ def test_unconfirmed_stop_never_restarts_navigation(tmp_path):
     called = []
     context = SimpleNamespace(busy=threading.Lock(), root=tmp_path,
         processes=SimpleNamespace(items={'navigation': object()}, stop=lambda _: called.append('kill')),
-        authorize=lambda _: None, stop_and_confirm=reject('stop unknown'),
+        authorize=lambda _: None, map_reservation=lambda *a, **k: nullcontext(lambda: None),
+        stop_and_confirm=reject('stop unknown'),
         start_navigation=lambda *_: called.append('start'))
     result = MapSupport.command(context, MapCommand.Request(operation='slam'), MapCommand.Response())
     assert not result.success and 'stop unknown' in result.message
@@ -110,3 +112,80 @@ def test_monitor_serializes_poll_with_process_replacement(tmp_path):
         monitor.join(2.)
         changer.join(2.)
     assert replaced.is_set() and result == []
+
+
+def test_amcl_initialization_rejects_an_earlier_map_and_waits_for_local_clock():
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+    from omslam_navigation.operator_control import OperatorControl
+    guard = OperatorControl.__new__(OperatorControl)
+    clock = [100_000_000_000]
+    guard.node = SimpleNamespace(now_ns=lambda: clock[0])
+    guard.session_start_ns = 99_900_000_000
+    guard.pending_pose, guard.localization_initialized = None, False
+    msg = PoseWithCovarianceStamped()
+    msg.header.frame_id = 'map'
+    msg.pose.pose.orientation.w = 1.
+    msg.header.stamp.sec, msg.header.stamp.nanosec = 99, 890_000_000
+    guard.amcl_pose(msg)
+    assert not guard.localization_initialized and guard.pending_pose is None
+    msg.header.stamp.sec, msg.header.stamp.nanosec = 100, 40_000_000
+    guard.amcl_pose(msg)
+    assert not guard.localization_initialized
+    clock[0] += 40_000_000
+    guard.confirm_localization(clock[0])
+    assert guard.localization_initialized
+
+
+def test_initialpose_holds_map_lease_until_current_estimate_and_teardown_retires_it():
+    from contextlib import contextmanager
+    import time
+    from builtin_interfaces.msg import Time
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+    from omslam_operator_msgs.msg import OperatorState
+    context = MapSupport.__new__(MapSupport)
+    context.busy = threading.Lock()
+    events = []
+    @contextmanager
+    def reservation(request, ending_guard=False):
+        events.append(('begin', ending_guard))
+        try:
+            yield lambda: events.append('confirm')
+        finally:
+            events.append('retired' if ending_guard and not context.processes.items else 'released')
+    context.authorize = lambda request: None
+    context.stop_and_confirm = lambda: events.append('stopped')
+    context.map_reservation = reservation
+    context.count_subscribers = lambda topic: 1
+    context.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(
+        nanoseconds=100_000_000_000, to_msg=lambda: Time(sec=100)))
+    context.state = OperatorState(session_id='old', localization_initialized=True, stopped=True)
+    context.state_at = time.monotonic()
+    def publish(message):
+        assert events == [('begin', False), 'stopped', 'confirm']
+        estimate = PoseWithCovarianceStamped()
+        estimate.header = message.header
+        context.receive_amcl(estimate)
+        events.append('amcl')
+    context.pose_pub = SimpleNamespace(publish=publish)
+    result = context.command(MapCommand.Request(operation='initialpose'), MapCommand.Response())
+    assert result.success, result.message
+    assert events == [('begin',False),'stopped','confirm','amcl','confirm','released']
+    events.clear()
+    context.processes = SimpleNamespace(items={'navigation':True})
+    def stop_previous(key):
+        events.append('old guard stopped')
+        context.processes.items.pop(key)
+    context.processes.stop = stop_previous
+    context.keepout_lock, context.keepout_sessions = threading.Lock(), {}
+    context.map_sub, context.map_group = object(), None
+    context.destroy_subscription = lambda sub: None
+    context.create_subscription = lambda *args, **kwargs: object()
+    def start(*args):
+        assert events == [('begin',True),'stopped','confirm','old guard stopped','retired']
+        context.processes.items['navigation'] = (SimpleNamespace(poll=lambda:None), None)
+        context.state = OperatorState(session_id='new', auto_ready=True)
+        context.state.header.stamp = Time(sec=101)
+        context.state_at = time.monotonic()
+    context.start_navigation = start
+    result = context.command(MapCommand.Request(operation='slam'), MapCommand.Response())
+    assert result.success, result.message

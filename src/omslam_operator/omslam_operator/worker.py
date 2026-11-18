@@ -21,7 +21,7 @@ from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from rclpy.time import Time
 from rosidl_runtime_py.convert import message_to_ordereddict
 from diagnostic_msgs.msg import DiagnosticArray
-from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped, Polygon, Point32
+from geometry_msgs.msg import TwistStamped, Polygon, Point32
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from nav2_msgs.msg import Costmap
 from sensor_msgs.msg import Image, Imu, JointState, LaserScan, CameraInfo, PointCloud2
@@ -66,8 +66,24 @@ class Shared:
         self.node=None
         self.goal_handle=None
         self.goal_active=False
+        self.goal_request=None
+        self.goal_phase=None
         self.path_blocked=False
         self.path_start_ns=0
+        self.path_candidate=None
+        self.path_terminal_id=''
+        self.guard_state_stamp=0
+        self.retired_sessions=set()
+
+    def cancel_unsent_goal(self):
+        """Called under the queue lock. A claimed request still has a ROS result."""
+        if self.goal_phase == 'queued' and any(
+                kind == 'navigate' and data.get('request_id') == self.goal_request
+                for kind, data in self.controls):
+            self.goal_phase = 'terminal'
+            self.data['goal_result'] = {'success':False, 'status':5,
+                'message':'전송 전 목표 취소', '_received':time.monotonic(),
+                'request_id':self.goal_request}
 
     def touch_map(self,key):
         """Caller holds lock; revisions cross the UI boundary, dense arrays do not."""
@@ -154,7 +170,6 @@ class ConsoleNode(Node):
         self.sub(DiagnosticArray,'/diagnostics',self.diagnostics,10)
         self.sub(MotorTelemetry,'/base/motor_state',lambda m:self.assign('motor',plain(m)),10)
         self.sub(OccupancyGrid,'/map',lambda m:self.grid('map',m),transient)
-        self.sub(PoseWithCovarianceStamped,'/amcl_pose',lambda m:self.assign('amcl_pose_seen',True),10)
         self.sub(Path,'/plan',self.path,10)
         for topic in ('/wheel/odometry','/odom'):
             self.sub(Odometry,topic,lambda m,t=topic:self.velocity(t,m.twist.twist),sensor)
@@ -242,6 +257,9 @@ class ConsoleNode(Node):
             for key in ('memory_points','obstacles','points'):self.assign(key,[])
             self.assign('cloud_info',{})
             with self.s.lock:self.s.data['topics'].clear()
+            self.s.guard_state_stamp=0
+            self.s.path_candidate=None
+            self.s.path_start_ns=0
         self.last_ros_time=ros
         for name in ([topic] if topic is not None else list(self.pending_samples)):
             sample=self.pending_samples.get(name)
@@ -273,17 +291,51 @@ class ConsoleNode(Node):
         with self.s.lock:
             self.s.data[key]=value
             if key=='goal_result' and value:
-                # /plan has no action ID. Keep a completed action's late DDS
-                # samples hidden until another goal starts in this console.
-                self.s.path_blocked=True
-                self.s.data['path']=[]
-                self.s.touch_map('path')
+                self.s.goal_phase='terminal'
+                terminal_id=value.get('internal_goal_id', '')
+                current_id=self.s.data['operator'].get('goal_id', '')
+                if not current_id or not terminal_id or terminal_id==current_id:
+                    self.s.path_terminal_id=terminal_id or current_id
+                    self.s.path_blocked=True
+                    self.s.path_candidate=None
+                    self.s.data['path']=[]
+                    self.s.touch_map('path')
             if key in ('path','scan','memory_points','obstacles'):
                 self.s.touch_map(key)
 
     def operator(self,msg):
         state=plain(msg)
-        self.assign('operator',state)
+        session, goal = msg.session_id, msg.goal_id
+        stamp=msg.header.stamp.sec*1_000_000_000+msg.header.stamp.nanosec
+        with self.s.lock:
+            previous=self.s.data['operator']
+            old_session, old_goal=previous.get('session_id'), previous.get('goal_id')
+            if session in self.s.retired_sessions:
+                return
+            if old_session == session and stamp and stamp < self.s.guard_state_stamp:
+                return
+            replaced=bool(old_session and session != old_session)
+            if replaced:
+                self.s.retired_sessions.add(old_session)
+                self.s.path_terminal_id=''
+                self.s.path_candidate=None
+                self.s.goal_handle=None
+                self.s.goal_active=False
+                self.s.goal_request=None
+                self.s.goal_phase=None
+                self.s.data['goal_result']={}
+                self.s.data['trace']=[]
+                self.s.touch_map('trace')
+            self.s.guard_state_stamp=stamp
+            self.assign('operator',state)
+            if replaced or old_goal != goal:
+                self.s.path_blocked=not goal or goal == self.s.path_terminal_id
+                self.s.path_start_ns=msg.goal_stamp_ns if goal else stamp
+                self.assign('path',[])
+                candidate=self.s.path_candidate
+                self.s.path_candidate=candidate if candidate and candidate[0]>=self.s.path_start_ns else None
+                if candidate and not self.s.path_blocked and candidate[0]>=self.s.path_start_ns:
+                    self.assign('path',candidate[1])
         sig=str((state.get('mode'),state.get('phase'),state.get('reason')))
         if sig!=self.last_event_signature:
             self.s.event('제어 상태: '+str(state.get('mode',''))+' / '+str(state.get('reason','')))
@@ -378,10 +430,19 @@ class ConsoleNode(Node):
     def path(self,msg):
         stamp_ns=msg.header.stamp.sec*1_000_000_000+msg.header.stamp.nanosec
         with self.s.lock:
-            if self.s.path_blocked or stamp_ns<self.s.path_start_ns:return
+            if stamp_ns<self.s.path_start_ns:return
         try:points=self.project([(p.pose.position.x,p.pose.position.y) for p in msg.poses],msg.header.frame_id,msg.header.stamp)
         except Exception:points=[]
-        self.assign('path',points)
+        with self.s.lock:
+            # Keep the newest sample even if initially displayed locally. A
+            # goal's only plan can precede its authoritative goal/idle state.
+            if (stamp_ns>=self.s.path_start_ns and
+                    (self.s.path_candidate is None or stamp_ns>=self.s.path_candidate[0])):
+                self.s.path_candidate=(stamp_ns,points)
+            else:
+                return
+            if not self.s.path_blocked:
+                self.assign('path',points)
 
     def scan(self,msg):
         stamp=stamp_seconds(msg.header.stamp)
@@ -563,19 +624,22 @@ class ConsoleNode(Node):
         elif kind=='view':self.frame_visible=data
 
     def start_goal(self,data):
-        request_id=uuid.uuid4().hex
+        request_id=data.get('request_id') or uuid.uuid4().hex
         self.debug_event('goal_requested',request_id,x=data['x'],y=data['y'],yaw=data['yaw'],
                          frame_id='map',stamp={'sec':data['stamp'].sec,'nanosec':data['stamp'].nanosec})
         def finish(value):
             self.debug_event('goal_result',request_id,result=value)
-            self.assign('goal_result',value)
-        if not self.navigate.server_is_ready():
-            self.s.event('목표 서버 준비 안 됨')
-            finish({'success':False,'message':'목표 서버 준비 안 됨','status':6})
-            return
+            if self.s.goal_request == request_id:
+                self.assign('goal_result',dict(value,request_id=request_id))
         if self.s.goal_active:
             self.s.event('기존 목표를 먼저 중지하세요')
             self.debug_event('goal_result',request_id,result={'success':False,'message':'기존 목표 활성','status':6})
+            return
+        self.s.goal_request=request_id
+        self.s.goal_phase='sending'
+        if not self.navigate.server_is_ready():
+            self.s.event('목표 서버 준비 안 됨')
+            finish({'success':False,'message':'목표 서버 준비 안 됨','status':6})
             return
         goal=OperatorNavigate.Goal()
         goal.token=data['token'];goal.epoch=data['epoch'];goal.pose.header.frame_id='map'
@@ -585,6 +649,7 @@ class ConsoleNode(Node):
         with self.s.lock:
             self.s.path_start_ns=self.get_clock().now().nanoseconds
             self.s.path_blocked=False
+            self.s.path_candidate=None
             self.assign('path',[])
         self.assign('goal_result',{})
         try:
@@ -596,14 +661,17 @@ class ConsoleNode(Node):
             finish({'success':False,'message':message,'status':6})
             return
         def accepted(f):
+            if self.s.goal_request != request_id:return
             try:
                 handle=f.result();self.s.goal_handle=handle
                 self.debug_event('goal_response',request_id,accepted=handle.accepted,
                                  action_goal_id=bytes(handle.goal_id.uuid).hex())
                 if not handle.accepted:
                     self.s.goal_active=False;finish({'success':False,'message':'목표 거부','status':6});return
+                self.s.goal_phase='accepted'
                 self.s.event('목표 수락됨')
                 def result(r):
+                    if self.s.goal_request != request_id:return
                     try:
                         data=plain(r.result().result)
                         finish(data);self.s.event(data.get('message','목표 종료'))
@@ -628,6 +696,8 @@ class ConsoleNode(Node):
             hb,self.s.latest_heartbeat=self.s.latest_heartbeat,None
             manual,self.s.latest_manual=self.s.latest_manual,None
             commands=list(self.s.controls);self.s.controls.clear()
+            if any(k=='navigate' and d.get('request_id')==self.s.goal_request for k,d in commands):
+                self.s.goal_phase='sending'
         if hb:self.heartbeat_pub.publish(hb)
         if manual:self.manual_pub.publish(manual)
         for kind,data in commands:

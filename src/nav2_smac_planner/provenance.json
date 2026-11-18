@@ -82,6 +82,24 @@
         "test/test_lattice_terminal.cpp"
       ],
       "reason": "Optional controller-aligned Euclidean terminal window for diff/omni lattices preserves the exact goal on every returned path and validates full in-place yaw sweep plus bounded terminal connector. Near-goal handoff avoids curvature-search loops without marking navigation complete. Startup-only threshold remains separate from A* heuristic fallback tolerance; original lattice smoothing precedes the exact-goal connector."
+    },
+    {
+      "path": "patches/0005-validate-start-and-incoming-lattice-edges.patch",
+      "sha256": "72d7d681b9425f3469ded1486227f89951f16007717de58be1d4e4a2f585d1a4",
+      "apply_from": "nav2_smac_planner",
+      "changed_upstream_files": [
+        "include/nav2_smac_planner/collision_checker.hpp",
+        "include/nav2_smac_planner/node_lattice.hpp",
+        "src/analytic_expansion.cpp",
+        "src/collision_checker.cpp",
+        "src/node_lattice.cpp",
+        "src/node_hybrid.cpp",
+        "src/smac_planner_lattice.cpp"
+      ],
+      "changed_local_files": [
+        "test/test_lattice_terminal.cpp"
+      ],
+      "reason": "Validate the continuous start, incoming lattice primitives, and analytic shortcuts against the swept filled footprint. Retain independent final validation. Index lethal and prohibited unknown cells once per search and query each occupied polygon column span for efficient checks beside inflated or unknown boundaries. Calculate incoming costs independently and wrap reflected heading indices."
     }
   ],
   "files": {
@@ -118,8 +136,8 @@
     "include/nav2_smac_planner/collision_checker.hpp": {
       "source_path": "nav2_smac_planner/include/nav2_smac_planner/collision_checker.hpp",
       "upstream_sha256": "75bbb37f3364cd53cbc53483b6032552e568d01fcb1baa7176779cfeff5b22ed",
-      "vendored_sha256": "75bbb37f3364cd53cbc53483b6032552e568d01fcb1baa7176779cfeff5b22ed",
-      "modified": false
+      "vendored_sha256": "7745d634ff71a2edf84a0a3dc124eb6db4f426d08d75a6db56571729c359df5f",
+      "modified": true
     },
     "include/nav2_smac_planner/constants.hpp": {
       "source_path": "nav2_smac_planner/include/nav2_smac_planner/constants.hpp",
@@ -154,8 +172,8 @@
     "include/nav2_smac_planner/node_lattice.hpp": {
       "source_path": "nav2_smac_planner/include/nav2_smac_planner/node_lattice.hpp",
       "upstream_sha256": "077b55225f6c1069bf8488aa9f979bd6e3bed5b198786be8bd7061d4e0ad9239",
-      "vendored_sha256": "077b55225f6c1069bf8488aa9f979bd6e3bed5b198786be8bd7061d4e0ad9239",
-      "modified": false
+      "vendored_sha256": "64cdd7e7d8070448eee763bf095b72623ac68088ca5fc5a93c00af954f232ffa",
+      "modified": true
     },
     "include/nav2_smac_planner/smac_planner_2d.hpp": {
       "source_path": "nav2_smac_planner/include/nav2_smac_planner/smac_planner_2d.hpp",
@@ -376,13 +394,13 @@
     "src/analytic_expansion.cpp": {
       "source_path": "nav2_smac_planner/src/analytic_expansion.cpp",
       "upstream_sha256": "47b90b88223825cee5edbaf0328c80db86cbfaf29c5aa9f3d78cd6189c4f32a4",
-      "vendored_sha256": "47b90b88223825cee5edbaf0328c80db86cbfaf29c5aa9f3d78cd6189c4f32a4",
-      "modified": false
+      "vendored_sha256": "1ae73adbe6bc0cac832db1da9c89405fa9eae225445590060db6b4561ef4b25c",
+      "modified": true
     },
     "src/collision_checker.cpp": {
       "source_path": "nav2_smac_planner/src/collision_checker.cpp",
       "upstream_sha256": "de383f6e993ffdf1470025618f04ee06e7e18e690a3a5654569faab32713f509",
-      "vendored_sha256": "42ff595b4c07a8ee5faf7df922e6687f6bb280d7da6f4849197bb86831bfd6a1",
+      "vendored_sha256": "579a7f9af924bfac9f9e5e982d702c98be36ed3578330c7a6d8cabd343bd979a",
       "modified": true
     },
     "src/costmap_downsampler.cpp": {
@@ -406,14 +424,14 @@
     "src/node_hybrid.cpp": {
       "source_path": "nav2_smac_planner/src/node_hybrid.cpp",
       "upstream_sha256": "e398942dc085e8d060130c937b793f2b8dd3c94ddc5dc9d03ee143747e08c79f",
-      "vendored_sha256": "e398942dc085e8d060130c937b793f2b8dd3c94ddc5dc9d03ee143747e08c79f",
-      "modified": false
+      "vendored_sha256": "d030aad27b39c1d241c2f6c06f778971d2b2ce32d472f2a3904c6035f1b7afda",
+      "modified": true
     },
     "src/node_lattice.cpp": {
       "source_path": "nav2_smac_planner/src/node_lattice.cpp",
       "upstream_sha256": "0e7431d8e65b20a8376c69647b34bf93937982632e7e8182df829e8b2c737836",
-      "vendored_sha256": "0e7431d8e65b20a8376c69647b34bf93937982632e7e8182df829e8b2c737836",
-      "modified": false
+      "vendored_sha256": "662f5c971373e8a547df139be453472a785e3d6a2747a14d66f72a45f56d1528",
+      "modified": true
     },
     "src/smac_planner_2d.cpp": {
       "source_path": "nav2_smac_planner/src/smac_planner_2d.cpp",
@@ -430,7 +448,7 @@
     "src/smac_planner_lattice.cpp": {
       "source_path": "nav2_smac_planner/src/smac_planner_lattice.cpp",
       "upstream_sha256": "21510b24f2b60b06e50451052c7857d955ca7bf6595e3e075eb5a1553a41850c",
-      "vendored_sha256": "f9cb39f712ed63477e496ae42d733bbed24ad238d0afe8dd43214b19349d2146",
+      "vendored_sha256": "7fdd3d153331d3f34e2014f5abe5bf083b470a42e68ca7f8b51746b7b37a9b91",
       "modified": true
     },
     "src/smoother.cpp": {
@@ -590,7 +608,7 @@
       "source_path": null,
       "upstream_sha256": null,
       "added_by_patch": "patches/0004-align-terminal-path-with-controller.patch",
-      "vendored_sha256": "86a285d0a5fe74f286df7ddec622516990dbb6bca20766307740ab8628eeddc1",
+      "vendored_sha256": "145248f8d807ce98b1e0c06405dbeebacce931a06767c3ebccce4ae4bb55ea61",
       "modified": true
     }
   },
@@ -599,7 +617,8 @@
     "patches/0001-preserve-continuous-grid-coordinates.patch",
     "patches/0002-reject-smoother-boundary-outside-map.patch",
     "patches/0003-validate-final-footprints-and-bounds.patch",
-    "patches/0004-align-terminal-path-with-controller.patch"
+    "patches/0004-align-terminal-path-with-controller.patch",
+    "patches/0005-validate-start-and-incoming-lattice-edges.patch"
   ],
   "reproduction": [
     "Download the pinned upstream archive and extract nav2_smac_planner/.",

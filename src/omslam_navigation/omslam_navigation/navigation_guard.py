@@ -301,7 +301,7 @@ class NavigationGuard(Node):
                      twist.linear.x, twist.linear.y, twist.angular.z)))
         self.remember(key, stamp_ns(message.header.stamp), valid)
         if self.operator is not None:
-            self.core.sample_stop(key, stamp_ns(message.header.stamp), twist.linear.x,
+            self.core.sample_stop(key, stamp_ns(message.header.stamp), math.hypot(twist.linear.x, twist.linear.y),
                                   twist.angular.z, valid, time.monotonic())
 
     def on_health(self, message):
@@ -365,7 +365,7 @@ class NavigationGuard(Node):
         old_state, old_goal = self.core.state, self.core.goal_id
         self.core.goals([(bytes(item.goal_info.goal_id.uuid).hex(),
                           stamp_ns(item.goal_info.stamp), item.status)
-                         for item in message.status_list], self.now_ns())
+                         for item in message.status_list], self.now_ns(), time.monotonic())
         if old_goal != self.core.goal_id or (old_state == 'RUNNING' and self.core.goal_status != 2):
             self.publish_zero()
 

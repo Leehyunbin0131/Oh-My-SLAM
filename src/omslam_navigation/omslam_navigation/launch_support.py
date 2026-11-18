@@ -172,6 +172,10 @@ def validate_configuration(configuration, share):
     _required_equal(controller['progress_checker_plugins'], ['progress_checker'], 'progress_checker_plugins')
     dwb = controller['FollowPath']
     _required_equal(dwb['plugin'], 'dwb_core::DWBLocalPlanner', 'controller plugin')
+    _required_equal(dwb['trajectory_generator_name'], 'omslam_navigation::SpeedAwareTrajectoryGenerator',
+                    'DWB low-speed trajectory generator')
+    cell_size = c['local_costmap']['local_costmap']['ros__parameters']['resolution']
+    dwb['minimum_projection_distance'] = 2.0 * _number(cell_size, 'local costmap resolution', 0.000001)
     for critic in ('ObstacleFootprint', 'RotateToGoal'):
         if critic not in dwb['critics']:
             raise ValueError(f'DWB requires the {critic} critic')
@@ -191,6 +195,7 @@ def validate_configuration(configuration, share):
     _number(controller['goal_checker']['yaw_goal_tolerance'], 'goal yaw tolerance', 0.000001, 0.15)
     _required_equal(controller['goal_checker']['plugin'],
                     'nav2_controller::StoppedGoalChecker', 'goal checker')
+    _required_equal(controller['goal_checker']['stateful'], False, 'current goal XY must be checked')
     stopped_velocity = _number(controller['goal_checker']['trans_stopped_velocity'],
                                'goal stopped translation velocity', 0.000001, 0.01)
     _number(controller['goal_checker']['rot_stopped_velocity'],
@@ -207,7 +212,7 @@ def validate_configuration(configuration, share):
             _required_equal(params[field], value, label)
         params[field] = value
     _required_equal(controller['progress_checker']['plugin'],
-                    'nav2_controller::PoseProgressChecker', 'progress checker')
+                    'omslam_navigation::SpeedAwareProgressChecker', 'progress checker')
     _required_equal(behavior['behavior_plugins'], ['wait'], 'behavior_plugins')
     _required_equal(behavior['wait']['plugin'], 'nav2_behaviors::Wait', 'wait behavior')
     _required_equal(bt['navigators'], ['navigate_to_pose'], 'navigators')
@@ -371,7 +376,8 @@ def _start(context, mode):
         _required_equal(backend_config[name]['ros__parameters'].get('use_sim_time'),
                         True, name + '.use_sim_time')
     for key in ['spawn_x', 'spawn_y', 'spawn_yaw', 'initial_x', 'initial_y', 'initial_yaw']:
-        _number(float(get(key)), key)
+        if key != 'spawn_x' or get(key):
+            _number(float(get(key)), key)
     initial_pose = boolean('initial_pose')
     if mode == 'amcl':
         map_path = str(validate_map_bundle(get('map')))
@@ -437,7 +443,7 @@ def make_launch_description(mode):
         'fault_relay': ('false', 'Enable the explicit verification sensor relay'),
         'gui_renderer': ('ogre', 'Gazebo GUI renderer'),
         'verbosity': ('2', 'Gazebo verbosity'),
-        'spawn_x': ('-108.0', 'Initial world X position, independent of AMCL initial pose'),
+        'spawn_x': ('', 'Initial world X, defaults to the selected simulator world spawn'),
         'spawn_y': ('0.0', 'Initial world Y position'),
         'spawn_yaw': ('0.0', 'Initial world yaw'),
         'map': ('', 'AMCL requires an absolute simulation map YAML with bundle metadata'),

@@ -25,6 +25,8 @@ import time
 from datetime import datetime
 
 import rclpy
+from omslam_navigation.measured_stop import MeasuredStop
+from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import String
@@ -58,17 +60,17 @@ signal.signal(signal.SIGINT, request_stop)
 signal.signal(signal.SIGTERM, request_stop)
 
 rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-node = rclpy.create_node('omslam_nav_session')
+node = rclpy.create_node('omslam_nav_session', parameter_overrides=[Parameter('use_sim_time', value=True)])
 state = {}
 state_at = 0.0
-odom = None
+stop_window = None
 def receive_state(message):
     global state, state_at
     state = json.loads(message.data)
     state_at = time.monotonic()
 def receive_odom(message):
-    global odom
-    odom = (time.monotonic(), message.twist.twist.linear.x, message.twist.twist.angular.z)
+    if stop_window is not None:
+        stop_window.observe(message, time.monotonic())
 node.create_subscription(String, '/navigation/state', receive_state,
     QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 node.create_subscription(Odometry, '/odom', receive_odom, 10)
@@ -131,8 +133,7 @@ try:
         raise RuntimeError('같은 ROS domain에 실행 중인 시뮬레이션/구동이 있습니다. 기존 실행을 종료한 뒤 다시 실행하세요.')
     print(f'Gazebo·Nav2 준비 중… 로그: {log_dir}', flush=True)
     nav = launch('navigation', ['ros2', 'launch', 'omslam_navigation', 'slam_navigation.launch.py',
-        f'world:={args.world}', f'spawn_x:={-108.0 if args.world == "airport" else 0.0}',
-        'spawn_y:=0.0', 'spawn_yaw:=0.0', 'gui:=true', 'pedestrians:=false'])
+        f'world:={args.world}', 'gui:=true', 'pedestrians:=false'])
     deadline = time.monotonic() + 60.
     stable_since = None
     while True:
@@ -189,16 +190,14 @@ finally:
     if processes:
         print('구동 해제 및 실행 정리 중…', flush=True)
         try:
+            stop_window = MeasuredStop(node.get_clock().now().nanoseconds)
             manifest['disable_response'] = set_enabled(False, cleanup=True)
             deadline = time.monotonic() + 3.
-            settled = None
             while time.monotonic() < deadline:
                 pump(cleanup=True)
-                stopped = (odom is not None and time.monotonic()-odom[0] < .5
-                           and abs(odom[1]) <= .01 and abs(odom[2]) <= .02)
-                settled = (settled or time.monotonic()) if stopped else None
-                if settled and time.monotonic()-settled >= .2:
-                    manifest['stopped'] = True
+                if stop_window.confirmed(node.get_clock().now().nanoseconds, time.monotonic()):
+                    manifest.update(stopped=True, stop_samples=stop_window.count,
+                                    first_stop_stamp_ns=stop_window.first_ns, last_stop_stamp_ns=stop_window.last_ns)
                     break
             if not manifest.get('stopped'):
                 raise RuntimeError('종료 전 측정 정지를 확인하지 못했습니다.')
