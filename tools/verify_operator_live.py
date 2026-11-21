@@ -308,12 +308,13 @@ class Run:
     def release_pad(self):
         QTest.mouseRelease(self.window, Qt.LeftButton, Qt.NoModifier, self.pad_point)
 
-    def fill(self, name, value):
+    def fill(self, name, value, submit=True):
         field = self.item(name)
         field.forceActiveFocus()
         QTest.keyClick(self.window, Qt.Key_A, Qt.ControlModifier)
         field.setProperty('text', str(value))
-        QTest.keyClick(self.window, Qt.Key_Return)
+        if submit:
+            QTest.keyClick(self.window, Qt.Key_Return)
 
     def add_goal(self, x, y=0., yaw=0.):
         # The online map boundary varies with spawn and sensor timing. Preserve
@@ -378,8 +379,10 @@ class Run:
 
     def map_path(self, button, path):
         self.click('mapToolsButton'); self.click(button)
-        self.fill('mapPathInput', path)
-        self.click('mapPathSubmit')
+        submit_with_enter = button == 'mapSaveButton'
+        self.fill('mapPathInput', path, submit=submit_with_enter)
+        if not submit_with_enter:
+            self.click('mapPathSubmit')
 
     def view_controls(self):
         self.do('camera_rgb_expand',lambda:self.click('cameraDockRgb'))

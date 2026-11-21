@@ -2,7 +2,9 @@
 planner_server:
   ros__parameters:
     GridBased:
-      tolerance: 0.10
+      # Keep a grid approximation inside the 8 cm exact-goal connector.
+      # A 10 cm fallback returned outside it on both recorded G5 grids.
+      tolerance: 0.04
       max_planning_time: 2.0
 
 controller_server:

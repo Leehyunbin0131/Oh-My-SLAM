@@ -867,7 +867,8 @@ class NavigationRun:
             self.wait_sim(.25)
             self.send_goal([2., 0., 0.], label)
             target_speed = rpm * radius * math.tau / 60.
-            self.until(lambda: .94 * target_speed < self.trajectory[-1]['velocity'][0] < 1.05 * target_speed,
+            minimum_fraction = .985 if rpm == cap else .94
+            self.until(lambda: minimum_fraction * target_speed < self.trajectory[-1]['velocity'][0] < 1.05 * target_speed,
                        25., 'reach measured speed for ' + label)
             start = self.sim_time
             position = self.pose().copy()
