@@ -20,7 +20,7 @@ from rclpy.task import Future
 from rclpy.signals import SignalHandlerOptions
 from rclpy.time import Time
 
-from action_msgs.msg import GoalStatusArray
+from action_msgs.msg import GoalStatus, GoalStatusArray
 from action_msgs.srv import CancelGoal
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import TwistStamped
@@ -132,6 +132,7 @@ class NavigationGuard(Node):
         self.missing = ['initializing']
         self.memory_observation = None
         self.health_observation = None
+        self.follow_started = None
         self.last_original_stamp = 0
         self.started = time.monotonic()
         self.last_graph_check = self.last_poll = self.last_report = 0.0
@@ -170,6 +171,7 @@ class NavigationGuard(Node):
         static_qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(TFMessage, '/tf_static', self.on_static_tf, static_qos)
+        self.create_subscription(GoalStatusArray, '/follow_path/_action/status', self.on_follow_status, transient)
         self.create_subscription(GoalStatusArray, '/navigate_to_pose/_action/status', self.on_status, transient)
 
         backend = ['slam_toolbox'] if self.p['localization_mode'] == 'slam' else ['map_server', 'amcl']
@@ -226,6 +228,7 @@ class NavigationGuard(Node):
         if self.core.clock(stamp_ns(message.clock), time.monotonic()):
             # tf2's default callback only covers jumps of at least one second.
             # Explicitly clear dynamic history for every observed rewind.
+            self.follow_started = None
             self.tf_buffer.clear()
             self.observations.clear()
             self.future_observations.clear()
@@ -378,7 +381,24 @@ class NavigationGuard(Node):
         if old_goal != self.core.goal_id or (old_state == 'RUNNING' and self.core.goal_status != 2):
             self.publish_zero()
 
+    def on_follow_status(self, message):
+        # The outer goal remains EXECUTING during CancelControl and Wait.
+        # Only FollowPath can supply motion in this navigation tree.
+        executing = [stamp_ns(item.goal_info.stamp) for item in message.status_list
+                     if item.status == GoalStatus.STATUS_EXECUTING]
+        started = max(executing, default=None)
+        if started != self.follow_started:
+            self.follow_started = started
+            if self.core.goal_id is not None:
+                self.core._discard_commands()
+                self.publish_zero()
+
     def on_requested(self, message):
+        stamp = stamp_ns(message.header.stamp)
+        if (self.follow_started is None or self.follow_started < self.core.goal_stamp
+                or stamp < self.follow_started):
+            self.core.rejected_sources += 1
+            return
         wall, ros_ns = time.monotonic(), self.now_ns()
         if self.core.requested(stamp_ns(message.header.stamp), message.header.frame_id,
                                twist_values(message), ros_ns, wall):

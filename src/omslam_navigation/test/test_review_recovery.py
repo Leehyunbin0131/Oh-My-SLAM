@@ -41,7 +41,7 @@ def test_pending_downstream_does_not_retire_first_command(monkeypatch):
                           message.twist.angular.z, now[0], now[1])
 
     guard = SimpleNamespace(core=core, operator=None, future_observations={},
-        p={'base_frame': 'base_footprint'}, last_original_stamp=0,
+        p={'base_frame': 'base_footprint'}, last_original_stamp=0, follow_started=2_110_000_000,
         now_ns=lambda: now[0], poll_states=lambda _: None,
         manage_base=lambda _: None, inspect_graph=lambda _: None,
         readiness=lambda *_: [], manage_cancel=lambda _: None,
@@ -108,3 +108,48 @@ def test_subsecond_clock_rewind_clears_tf_and_stop_observations():
     assert stamp_ns(latest.header.stamp) == 99_800_000_000
     assert latest.transform.translation.x == 1.
     assert not guard.observations and not guard.map_valid
+
+
+def test_follow_path_cancel_retires_motion_and_active_silence_still_faults(monkeypatch):
+    now = [2_120_000_000, 11.12]
+    monkeypatch.setattr('omslam_navigation.navigation_guard.time.monotonic', lambda: now[1])
+    core = NavigationGate()
+    core.clock(1_000_000_000, 10.)
+    core.health(True, '', 10.)
+    core.clock(*now)
+    assert core.arm(2_100_000_000, now[1])[0]
+    core.goals([('outer', 2_110_000_000, 2)], *now)
+    forwarded, stops = [], []
+    guard = SimpleNamespace(core=core, operator=None, follow_started=None, now_ns=lambda: now[0],
+                            requested_pub=SimpleNamespace(publish=forwarded.append),
+                            publish_zero=lambda: stops.append(now[0]))
+
+    def status(accepted, state):
+        item = SimpleNamespace(goal_info=SimpleNamespace(stamp=Time(nanoseconds=accepted).to_msg()), status=state)
+        NavigationGuard.on_follow_status(guard, SimpleNamespace(status_list=[item]))
+
+    def drive(stamp):
+        NavigationGuard.on_requested(guard, command(stamp, .1))
+
+    status(now[0], 2)
+    drive(now[0])
+    values = (.1, 0., 0., 0., 0., 0.)
+    assert core.final(now[0], 'base_footprint', values, *now)
+    status(now[0], 3)
+    assert stops and core.output == (0., 0.)
+    drive(now[0])
+    assert len(forwarded) == 1
+    assert not core.final(now[0], 'base_footprint', values, *now)
+    now[:] = [2_600_000_000, 11.60]
+    core.clock(*now)
+    core.tick(*now)
+    assert core.state == 'RUNNING' and not core.sources
+    status(now[0], 2)
+    drive(now[0] - 10_000_000)
+    assert len(forwarded) == 1
+    drive(now[0])
+    assert len(forwarded) == 2 and core.final(now[0], 'base_footprint', values, *now)
+    now[:] = [2_910_000_000, 11.91]
+    core.clock(*now)
+    core.tick(*now)
+    assert core.state == 'FAULT_LATCHED' and core.reason == 'original navigation command expired'
