@@ -28,7 +28,8 @@ for name in ('AMENT_PREFIX_PATH', 'COLCON_PREFIX_PATH', 'CMAKE_PREFIX_PATH', 'PY
 env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 command = ['colcon', 'build', '--base-paths', 'src', '--packages-up-to', 'omslam_operator_support', '--parallel-workers', '3',
            '--cmake-args', '-DCMAKE_BUILD_TYPE=Release', '-DPython3_EXECUTABLE=/usr/bin/python3']
-manifest = {'started_at': datetime.now().astimezone().isoformat(), 'cwd': str(ROOT),
+revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+manifest = {'git_commit': revision, 'started_at': datetime.now().astimezone().isoformat(), 'cwd': str(ROOT),
             'command': command, 'source_sha256': sources(), 'log': str(out / 'build.log')}
 with (out / 'build.log').open('w') as log:
     result = subprocess.run(['bash', '-c', 'source /opt/ros/jazzy/setup.bash && exec "$@"', 'operator-build', *command],

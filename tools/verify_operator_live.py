@@ -678,6 +678,8 @@ if not args.qml_only:
     build = json.loads(manifest.read_text())
     changed = [p for p, h in build['source_sha256'].items() if not (ROOT/p).is_file() or hashlib.sha256((ROOT/p).read_bytes()).hexdigest() != h]
     E.check('latest_built_sources', build['exit_code'] == 0 and build['source_unchanged'] and not changed, changed=changed)
+    E.report['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    E.report['build_commit'] = build.get('git_commit')
     E.report['build_manifest'] = str(manifest)
     E.report['build_source_sha256'] = build['source_sha256']
 packages = ('omslam_operator', 'omslam_operator_msgs', 'omslam_operator_support', 'omslam_navigation', 'omslam_base', 'omslam_sim', 'omslam_system_monitor')

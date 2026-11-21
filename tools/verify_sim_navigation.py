@@ -1550,6 +1550,7 @@ def main():
     run.validation = {}
     try:
         build = verified_build(run.build_manifest)
+        result.data['build_commit'] = build.get('git_commit')
         result.data['git_commit'] = subprocess.check_output(
             ['git','rev-parse','HEAD'], cwd=WORKSPACE, text=True).strip()
         from ament_index_python.packages import get_package_prefix

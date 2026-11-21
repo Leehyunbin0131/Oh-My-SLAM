@@ -84,6 +84,7 @@ def main():
     output = (args.output or REPORTS / started.strftime('build-%Y%m%d-%H%M%S-%f')).resolve()
     output.mkdir(parents=True, exist_ok=False)
     packages = navigation_packages()
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=WORKSPACE, text=True).strip()
     before = tree_hashes('src', packages)
     command = ['colcon', 'build', '--base-paths', 'src', '--packages-up-to', 'omslam_navigation',
                '--parallel-workers', '3', '--cmake-args', '-DCMAKE_BUILD_TYPE=Release',
@@ -100,7 +101,7 @@ def main():
                                'navigation-build', *command], cwd=WORKSPACE, env=env, stdout=log,
                               stderr=subprocess.STDOUT)
     code = proc.returncode
-    manifest = {'packages': packages, 'command': command, 'cwd': str(WORKSPACE), 'started': started.isoformat(),
+    manifest = {'git_commit': revision, 'packages': packages, 'command': command, 'cwd': str(WORKSPACE), 'started': started.isoformat(),
                 'source_sha256': before, 'log': str(output/'build.log')}
     if code == 0:
         if before == tree_hashes('src', packages):
