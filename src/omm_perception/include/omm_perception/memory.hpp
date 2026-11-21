@@ -66,7 +66,7 @@ private:
   mutable size_t archive_budget_ = 4096;
   size_t archive_count_ = 0;
   void store(const std::array<int, 3> &key, const Voxel &voxel,
-             sqlite3_stmt *statement, bool existing = false);
+             sqlite3_stmt *statement);
   void archiveAdded(const std::array<int, 3> &key, double z);
   void archiveRemoved(const std::array<int, 3> &key);
   void compactArchive() const;

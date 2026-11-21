@@ -316,6 +316,26 @@ class Run:
         QTest.keyClick(self.window, Qt.Key_Return)
 
     def add_goal(self, x, y=0., yaw=0.):
+        # The online map boundary varies with spawn and sensor timing. Preserve
+        # the requested heading and pick the closest fully observed test pose.
+        from omslam_navigation.keepouts import grid_goal_error
+        grid = self.shared.map_layers['map']
+        request = (x,y)
+        candidates = sorted(((i*.1,j*.1) for i in range(-10,11) for j in range(-10,11)),
+                            key=lambda d:d[0]*d[0]+d[1]*d[1])
+        prior = self.model.goals
+        for dx,dy in candidates:
+            px,py = x+dx,y+dy
+            if any(math.hypot(px-g['x'],py-g['y']) < .18 for g in prior):
+                continue
+            if all(not grid_goal_error(px+ex,py+ey,yaw,grid['origin'],grid['resolution'],
+                       grid['width'],grid['height'],grid['cells'].ravel())
+                   for ex,ey in ((0,0),(.05,0),(-.05,0),(0,.05),(0,-.05))):
+                x,y = px,py
+                break
+        else:
+            raise AssertionError('No observed footprint near GUI test waypoint '+str(request))
+        E.report.setdefault('waypoint_fixtures',[]).append(dict(request=request,selected=(x,y),yaw=yaw))
         before = len(self.model.goals)
         yield from self.wait('add goal button enabled',lambda:self.item('addGoalButton').isEnabled(),5.)
         self.do('goal_add_ui', lambda: self.click('addGoalButton'))
@@ -520,17 +540,19 @@ class Run:
                 E.check('manual_auto_acquired', self.op()['phase']=='ACTIVE' and self.model.token and self.model.deadman, operator=self.op())
                 yield from self.stop_wait('manual_release', self.release_pad)
             if args.continue_at in ('all','controls'):
-                slider=self.item('speedSlider');slider.forceActiveFocus()
-                self.do('speed_25_percent_ui',lambda:QTest.mouseClick(self.window,Qt.LeftButton,Qt.NoModifier,slider.mapToScene(QPointF(7,slider.height()/2)).toPoint()))
-                target=float(self.op()['max_linear_velocity'])*.25
-                yield from self.wait('speed limit response',lambda:abs(self.op().get('linear_limit',0)-target)<1e-6,5.)
+                maximum_rpm = float(self.op()['max_wheel_rpm'])
+                requested_rpm = round(maximum_rpm * .25, 1)
+                prior_rpm = self.op()['wheel_rpm_limit']
+                self.do('fractional_rpm_input', lambda:self.fill('rpmLimitInput', requested_rpm))
+                target = float(self.op()['max_linear_velocity']) * requested_rpm / maximum_rpm
+                yield from self.wait('speed limit response',lambda:abs(self.op().get('wheel_rpm_limit',0)-requested_rpm)<1e-6 and abs(self.op().get('linear_limit',0)-target)<1e-6,5.)
                 self.do('speed_limit_move',self.press_pad);limit_begin=time.monotonic()
                 yield from self.wait('limited motion',self.moving,10.);yield from self.delay(.6)
                 yield from self.stop_wait('speed_limit_release',self.release_pad)
                 E.check('speed_limit_ui',self.get('speed_response').get('success') and abs(self.op()['linear_limit']-target)<1e-6,
                     target=target,begin=limit_begin,end=time.monotonic(),response=self.get('speed_response'))
-                QTest.mouseClick(self.window,Qt.LeftButton,Qt.NoModifier,slider.mapToScene(QPointF(slider.width()/2,slider.height()/2)).toPoint())
-                yield from self.wait('speed restored to half',lambda:abs(self.op().get('linear_limit',0)-target*2)<1e-6,5.)
+                self.fill('rpmLimitInput', prior_rpm)
+                yield from self.wait('speed restored',lambda:abs(self.op().get('wheel_rpm_limit',0)-prior_rpm)<1e-6,5.)
             self.do('focus_loss_start', self.press_pad)
             yield from self.wait('movement before focus loss', self.moving)
             # Move actual QML keyboard focus away from the pad. Offscreen hide has no native deactivation event.

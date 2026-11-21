@@ -96,11 +96,18 @@ class EncoderOdometry:
                 'velocities':[dl/dt if dt else 0.,dr/dt if dt else 0.]}
 
 
+# Bounded delivery skew between /clock and a stamped message. Original steady
+# leases start no later than receipt, even for a slightly leading ROS stamp.
+CLOCK_SKEW_S = .020
+
+
 class CommandGate:
     TIMEOUT = .3
 
     def __init__(self):
         self.source = None
+        self.source_history = {}
+        self.last_final_stamp = -1
         self.target = None
         self.stopped_stamp = -1
         self.generation = 0
@@ -119,6 +126,8 @@ class CommandGate:
     def clear(self):
         self.withdraw_target()
         self.source = None
+        self.source_history.clear()
+        self.last_final_stamp = -1
         self.stopped_stamp = -1
         self.active = False
 
@@ -126,18 +135,23 @@ class CommandGate:
         if not self.active or stamp < self.activation_ns or stamp <= 0:
             return False
         age = (ros_ns-stamp)*1e-9
-        if not 0 <= age < self.TIMEOUT:
+        if not -CLOCK_SKEW_S <= age < self.TIMEOUT:
             return False
         if self.source and stamp < self.source[0]:
             return False
         if not self.source or stamp > self.source[0]:
-            issued = now-age
+            issued = now-max(0., age)
             # Independent ROS/steady sampling can make a newer stamp map to
             # an older issue time. Drop that sample instead of faulting the
             # hardware driver or extending the original lease by clamping it.
             if self.source and issued < self.source[1]:
                 return False
             self.source = (stamp, issued)
+            self.source_history = {k: t for k, t in self.source_history.items()
+                                   if 0 <= now - t < self.TIMEOUT}
+            self.source_history[stamp] = issued
+            if len(self.source_history) > 32:
+                del self.source_history[next(iter(self.source_history))]
         return True
 
     def final(self, stamp, vx, wz, ros_ns, now):
@@ -157,14 +171,15 @@ class CommandGate:
                 # adapter; the stop cannot create or extend that lease.
                 self.target = (0., 0., self.source[1], now)
             return True
-        if not self.source or stamp != self.source[0]:
+        if stamp not in self.source_history or stamp < self.last_final_stamp:
             return False
         age = (ros_ns-stamp)*1e-9
-        if not 0 <= age < self.TIMEOUT or not 0 <= now-self.source[1] < self.TIMEOUT:
+        if not -CLOCK_SKEW_S <= age < self.TIMEOUT or not 0 <= now-self.source_history[stamp] < self.TIMEOUT:
             return False
         if (vx or wz) and stamp <= self.stopped_stamp:
             return False
-        self.target = (vx,wz,self.source[1],now)
+        self.last_final_stamp = stamp
+        self.target = (vx,wz,self.source_history[stamp],now)
         return True
 
     def current(self, now):

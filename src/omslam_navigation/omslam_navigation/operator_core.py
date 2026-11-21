@@ -8,7 +8,7 @@ import math
 import secrets
 
 from .guard_core import NavigationGate
-from omslam_base.core import Geometry
+from omslam_base.core import CLOCK_SKEW_S, Geometry
 from omslam_sim.control import SIM_MAX_WHEEL_RPM
 
 
@@ -35,6 +35,7 @@ class OperatorGate(NavigationGate):
         self.wheel_rpm_limit = self.geometry.max_rpm * self.speed_percent / 100.
         self.linear_limit = self.limits.max_vx * self.speed_percent / 100.
         self.angular_limit = self.limits.max_wz * self.speed_percent / 100.
+        self.stop_deadlines = dict(wheel=self.STOP_FRESH, odom=self.STOP_FRESH)
         self.stop_samples = {}
         self.stopped_since = None
 
@@ -51,7 +52,7 @@ class OperatorGate(NavigationGate):
     def owner_live(self, ros_ns, wall):
         return (bool(self.token) and self.owner_at is not None and
                 0 <= wall - self.owner_at < self.OWNER_TIMEOUT and
-                0 <= (ros_ns - self.owner_stamp) * 1e-9 < self.OWNER_TIMEOUT)
+                -CLOCK_SKEW_S <= (ros_ns - self.owner_stamp) * 1e-9 < self.OWNER_TIMEOUT)
 
     def authorized(self, token, epoch, ros_ns, wall):
         return (bool(token) and secrets.compare_digest(token, self.token) and
@@ -93,10 +94,10 @@ class OperatorGate(NavigationGate):
     def heartbeat(self, token, epoch, sequence, stamp, ros_ns, wall):
         if (not self.authorized(token, epoch, ros_ns, wall) or
                 sequence <= self.heartbeat_sequence or stamp <= self.owner_stamp or
-                not 0 <= (ros_ns - stamp) * 1e-9 < self.OWNER_TIMEOUT):
+                not -CLOCK_SKEW_S <= (ros_ns - stamp) * 1e-9 < self.OWNER_TIMEOUT):
             return False
         self.heartbeat_sequence, self.owner_stamp = sequence, stamp
-        self.owner_at = wall - (ros_ns - stamp) * 1e-9
+        self.owner_at = wall - max(0., (ros_ns - stamp) * 1e-9)
         return True
 
     def begin_transition(self, mode):
@@ -122,7 +123,7 @@ class OperatorGate(NavigationGate):
             self.state, self.reason = 'RUNNING', 'manual ready; release input before driving'
         elif mode == 'AUTO':
             self.reason = 'auto ready; waiting for an authorized goal'
-        else:
+        elif not self.restart_required:
             self.state, self.reason = 'DISARMED', 'disabled; measured stop confirmed'
         return True, self.reason
 
@@ -155,9 +156,10 @@ class OperatorGate(NavigationGate):
         valid = self.clock_fresh(wall)
         for key in ('wheel', 'odom'):
             sample = self.stop_samples.get(key)
+            deadline = self.stop_deadlines[key]
             valid = valid and sample is not None and sample[2] and (
-                0 <= (ros_ns - sample[0]) * 1e-9 < self.STOP_FRESH and
-                0 <= wall - sample[1] < self.STOP_FRESH)
+                -CLOCK_SKEW_S <= (ros_ns - sample[0]) * 1e-9 < deadline and
+                0 <= wall - sample[1] < deadline)
         if not valid:
             self.stopped_since = None
             return False
@@ -205,7 +207,16 @@ class OperatorGate(NavigationGate):
         scale = min(1., self.wheel_rpm_limit / max(abs(left), abs(right), 1e-30))
         return (vx * scale, vy, vz, wx, wy, wz * scale)
 
+    def limit_final(self, stamp, values):
+        limited = self.limit_values(values)
+        source = self.sources.get(stamp)
+        if self.mode == 'MANUAL' and source is not None and not source.linear_requested:
+            # OPEN_LOOP can retain translation across a release and new turn.
+            return (0., *limited[1:])
+        return limited
+
     def brake_manual(self, reason, require_release=True):
+        self.manual_at = None
         self._discard_commands()
         self.release_required = require_release
         self.reason = reason
@@ -228,7 +239,7 @@ class OperatorGate(NavigationGate):
         if not super().requested(stamp, frame, values, ros_ns, wall):
             self.brake_manual('manual command is stale or not ready')
             return False
-        self.manual_at = wall - (ros_ns - stamp) * 1e-9
+        self.manual_at = wall - max(0., (ros_ns - stamp) * 1e-9)
         if direction:
             self.last_direction = direction
         return True

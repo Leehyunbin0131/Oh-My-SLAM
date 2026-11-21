@@ -23,7 +23,8 @@ def receiver(monkeypatch):
     shared = Shared()
     node = ConsoleNode(shared, True, '')
     node.last_graph = node.last_history = wall[0]
-    node.frame_visible = 'perception'
+    assert not node.cloud_subscriptions
+    node.select_view('perception')
     node.get_clock().set_ros_time_override(Time(seconds=10.))
     callbacks = {s.topic_name: s.callback for s in node.subscriptions}
     f = SimpleNamespace(node=node, shared=shared, wall=wall, callbacks=callbacks)

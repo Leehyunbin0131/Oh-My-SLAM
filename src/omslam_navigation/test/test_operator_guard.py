@@ -1,3 +1,4 @@
+import pytest
 """Ownership, stopped transitions and replay boundaries for the shared guard."""
 
 import math
@@ -161,7 +162,9 @@ def test_manual_reverse_lock_invalid_axes_and_limit_values():
     assert not gate.manual(gate.token, gate.epoch_ns, 2, True, stamp, FRAME,
                            (math.nan, 0., 0., 0., 0., 0.), stamp, 11.14)
     assert not gate.sources
-    assert gate.limit_values((0.2, 0., 0., 0., 0., 0.6)) == MOVE
+    limited = gate.limit_values((0.2, 0., 0., 0., 0., 0.6))
+    assert limited[5] / limited[0] == pytest.approx(3.)
+    assert max(map(abs, gate.geometry.rpm(limited[0],limited[5]))) == pytest.approx(gate.wheel_rpm_limit)
 
 
 def test_clock_rewind_discards_stop_history_and_allows_explicit_reactivation():
@@ -208,3 +211,16 @@ def test_odometry_lateral_motion_cannot_confirm_a_stop(monkeypatch):
         else:
             stopped = gate.stopped(stamp, wall)
     assert stopped
+
+
+def test_pure_turn_after_manual_release_cannot_restore_smoother_translation():
+    gate = ready()
+    release(gate)
+    stamp = sample(gate, 2.14, 11.14)
+    assert gate.manual(gate.token, gate.epoch_ns, 2, True, stamp, FRAME, MOVE, stamp, 11.14)
+    gate.manual(gate.token, gate.epoch_ns, 3, False, stamp, FRAME, ZERO, stamp, 11.145)
+    assert gate.manual_at is None
+    stamp = sample(gate, 2.16, 11.16)
+    rotate = (0., 0., 0., 0., 0., .1)
+    assert gate.manual(gate.token, gate.epoch_ns, 4, True, stamp, FRAME, rotate, stamp, 11.16)
+    assert gate.limit_final(stamp, (.07, *rotate[1:])) == rotate

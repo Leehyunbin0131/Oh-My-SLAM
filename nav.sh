@@ -53,6 +53,7 @@ log_dir = root / 'reports/navigation' / datetime.now().strftime('%Y%m%d-%H%M%S-%
 log_dir.mkdir(parents=True)
 os.environ['ROS_LOG_DIR'] = str(log_dir / 'ros')
 stopping = False
+activation_requested = False
 def request_stop(*_):
     global stopping
     stopping = True
@@ -90,6 +91,8 @@ def pump(seconds=.1, cleanup=False):
         rclpy.spin_once(node, timeout_sec=min(.1, max(0., end-time.monotonic())))
 
 def launch(label, command):
+    if stopping:
+        raise KeyboardInterrupt
     output = (log_dir / f'{label}.log').open('w')
     try:
         proc = subprocess.Popen(command, cwd='/tmp', stdout=output,
@@ -104,8 +107,12 @@ def launch(label, command):
     return proc
 
 def set_enabled(value, cleanup=False):
+    global activation_requested
     if not enable.wait_for_service(timeout_sec=2.):
         raise RuntimeError('/navigation/enable 서비스를 찾을 수 없습니다.')
+    if stopping and value:
+        raise KeyboardInterrupt
+    activation_requested |= value
     future = enable.call_async(SetBool.Request(data=value))
     deadline = time.monotonic() + 5.
     while not future.done() and time.monotonic() < deadline:
@@ -189,24 +196,25 @@ finally:
     # Disable while our navigation server is still alive, before stopping any child.
     if processes:
         print('구동 해제 및 실행 정리 중…', flush=True)
-        try:
-            stop_window = MeasuredStop(node.get_clock().now().nanoseconds)
-            manifest['disable_response'] = set_enabled(False, cleanup=True)
-            deadline = time.monotonic() + 3.
-            while time.monotonic() < deadline:
-                pump(cleanup=True)
-                if stop_window.confirmed(node.get_clock().now().nanoseconds, time.monotonic()):
-                    manifest.update(stopped=True, stop_samples=stop_window.count,
-                                    first_stop_stamp_ns=stop_window.first_ns, last_stop_stamp_ns=stop_window.last_ns)
-                    break
-            if not manifest.get('stopped'):
-                raise RuntimeError('종료 전 측정 정지를 확인하지 못했습니다.')
-        except Exception as exc:
-            manifest['disable_error'] = str(exc)
-            print(f'구동 해제 확인 실패: {exc}', file=sys.stderr, flush=True)
-            exit_code = 1
+        if activation_requested or state.get('base_state') == 3:
+            try:
+                stop_window = MeasuredStop(node.get_clock().now().nanoseconds)
+                manifest['disable_response'] = set_enabled(False, cleanup=True)
+                deadline = time.monotonic() + 3.
+                while time.monotonic() < deadline:
+                    pump(cleanup=True)
+                    if stop_window.confirmed(node.get_clock().now().nanoseconds, time.monotonic()):
+                        manifest.update(stopped=True, stop_samples=stop_window.count,
+                                        first_stop_stamp_ns=stop_window.first_ns, last_stop_stamp_ns=stop_window.last_ns)
+                        break
+                if not manifest.get('stopped'):
+                    raise RuntimeError('종료 전 측정 정지를 확인하지 못했습니다.')
+            except Exception as exc:
+                manifest['disable_error'] = str(exc)
+                print(f'구동 해제 확인 실패: {exc}', file=sys.stderr, flush=True)
+                exit_code = 1
         for proc, output, entry in reversed(processes):
-            for sig, timeout in ((signal.SIGINT, 10.), (signal.SIGTERM, 3.), (signal.SIGKILL, 2.)):
+            for sig, timeout in ((signal.SIGINT, 18.), (signal.SIGTERM, 3.), (signal.SIGKILL, 2.)):
                 proc.poll()
                 if not group_exists(proc.pid):
                     break

@@ -21,6 +21,30 @@ from .telemetry import AckObservation, encoder_snapshot, serial_snapshot, write_
 from .vendor import load_control_module
 
 
+class MotorLog:
+    """Keep the current and preceding serial log for this transport."""
+    def __init__(self, stream, max_bytes=16 * 1024 * 1024):
+        self.stream = stream
+        self.path = Path(stream.name)
+        self.size = self.path.stat().st_size
+        self.max_bytes = max_bytes
+
+    def write(self, data):
+        size = len(data) if isinstance(data, bytes) else len(data.encode(self.stream.encoding))
+        if self.size and self.size + size > self.max_bytes:
+            mode = self.stream.mode
+            self.stream.close()
+            self.path.replace(self.path.with_name(self.path.name + '.1'))
+            self.stream = self.path.open(mode)
+            self.size = 0
+        written = self.stream.write(data)
+        self.size += size
+        return written
+
+    def close(self):
+        self.stream.close()
+
+
 class BaseBridge(LifecycleNode):
     def __init__(self):
         super().__init__('base_bridge')
@@ -57,6 +81,8 @@ class BaseBridge(LifecycleNode):
         self.motor_pub = self.create_publisher(MotorTelemetry,'/base/motor_state',10)
         self.target_pub = self.create_publisher(Float64MultiArray,'/mock/wheel_target',10)
         self.timer = self.create_timer(.02,self.publish,clock=Clock(clock_type=ClockType.STEADY_TIME))
+        self.fault_deactivate_pending = False
+        self.last_diag_error = None
         self.last_diag = 0.
         self.add_on_set_parameters_callback(self.parameters)
 
@@ -119,6 +145,8 @@ class BaseBridge(LifecycleNode):
         return True
 
     def on_deactivate(self,state):
+        with self.lock:
+            self.fault_deactivate_pending = False
         return TransitionCallbackReturn.SUCCESS if self.stop_accepting() else TransitionCallbackReturn.FAILURE
 
     def close_worker(self):
@@ -144,6 +172,8 @@ class BaseBridge(LifecycleNode):
 
     def fail(self, message):
         with self.lock:
+            if self.active:
+                self.fault_deactivate_pending = True
             self.error = str(message); self.active = False; self.gate.clear(); self.output = [0.,0.,0.]
 
     @staticmethod
@@ -226,6 +256,11 @@ class BaseBridge(LifecycleNode):
                                     generation != parent.gate.generation or
                                     target != parent.gate.current(time.monotonic())):
                                 return None
+                            if left or right:
+                                remaining_ms = int(1000 * (.3 - (time.monotonic() - target[2])))
+                                if remaining_ms < 100:
+                                    return None
+                                kwargs['lease_ms'] = min(kwargs['lease_ms'], remaining_ms)
                             return super().set_speed(left, right, **kwargs)
 
                     # MotorClient.command() also calls this override. Capture
@@ -248,14 +283,23 @@ class BaseBridge(LifecycleNode):
                 client = SnapshotClient(self.value('port'),report,
                             calibration=calibration,on_sample=sample_callback)
                 client.__enter__()
+                for name in ('log', 'command_log'):
+                    stream = getattr(client, name, None)
+                    if stream is not None:
+                        setattr(client, name, MotorLog(stream))
                 settings.configure(client)
-                drive = load_control_module('wheel_drive').WheelDrive(client,settings)
+                # Target selection and assignment use one time sample. Wire ticks,
+                # ARM completion and the write above always check the live clock.
+                assignment_time = None
+                def drive_clock():
+                    return assignment_time if assignment_time is not None else time.monotonic()
+                drive = load_control_module('wheel_drive').WheelDrive(client,settings,clock=drive_clock)
                 with self.lock: self.ready=not self.error
             disabled = False
             while not self.exit_event.is_set():
                 if client: client.poll(block=False)
-                now=time.monotonic()
                 with self.lock:
+                    now=time.monotonic()
                     ros_now=self.get_clock().now().nanoseconds
                     if self.last_ros is not None and ros_now < self.last_ros:
                         self.fail('ROS clock reversed; reconfigure required')
@@ -275,7 +319,12 @@ class BaseBridge(LifecycleNode):
                     rpms=self.geometry.rpm(vx,wz)
                     remaining=.3-(now-issued)
                     if drive:
-                        if target != last_target: drive.set_target_rpm(*rpms,issued_at=issued)
+                        if target != last_target:
+                            assignment_time = now
+                            try:
+                                drive.set_target_rpm(*rpms, issued_at=issued)
+                            finally:
+                                assignment_time = None
                         drive.tick()
                     # Mirror the minimum wire lease rule for mock diagnostics.
                     if remaining < .1 and not any(rpms): rpms=(0.,0.); remaining=0.
@@ -300,8 +349,12 @@ class BaseBridge(LifecycleNode):
         with self.lock:
             samples=list(self.sample_queue);self.sample_queue.clear()
             output=list(self.output); error=self.error; active=self.active;ready=self.ready
+            deactivate = self.fault_deactivate_pending
+            self.fault_deactivate_pending = False
             motor_snapshot = self.motor_telemetry
             telemetry_error = self.telemetry_error
+        if deactivate:
+            self.trigger_deactivate()
         for sample in samples:
             msg=Odometry(); ns=sample['stamp_ns']
             msg.header.stamp.sec=ns//1000000000;msg.header.stamp.nanosec=ns%1000000000
@@ -323,7 +376,8 @@ class BaseBridge(LifecycleNode):
                                       self.get_clock().now().nanoseconds, KeyValue)
             self.motor_pub.publish(msg)
             self.last_motor_publish = now
-        if now-self.last_diag >= 1. or error:
+        if now-self.last_diag >= 1. or error != self.last_diag_error:
+            self.last_diag_error = error
             status=DiagnosticStatus();status.name='omslam_base';status.hardware_id=self.backend
             status.level=DiagnosticStatus.ERROR if error else DiagnosticStatus.OK if ready else DiagnosticStatus.WARN
             status.message=error or ('active' if active else 'inactive' if ready else 'connecting')

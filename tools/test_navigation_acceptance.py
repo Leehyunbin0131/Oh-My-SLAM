@@ -43,3 +43,22 @@ def test_preflight_rejects_changed_source_or_install(tmp_path, monkeypatch, tree
     (tmp_path/tree/'fixture/config.yaml').write_text('setting: 2')
     with pytest.raises(ValueError, match='differ'):
         build.verified_build(path)
+
+
+def test_cancel_checks_original_stamp_before_terminal_and_unstamped_actuator_after():
+    from verify_sim_navigation import late_cancel_commands
+    def event(topic, stamp, wall):
+        return dict(topic=topic, stamp=stamp, wall_time=wall, velocity=[.1,0,0,0,0,0])
+    old = event('/cmd_vel', 9.99, 32.)
+    new = event('/cmd_vel', 10.01, 30.5)
+    actuator = event('/sim/cmd_vel', None, 31.1)
+    assert late_cancel_commands([old, new, actuator], 10., 31.) == [new, actuator]
+
+
+def test_sensor_stop_keeps_actual_deadline_when_invalid_or_late_frames_arrive():
+    from verify_sim_navigation import last_valid_sensor_stamp
+    topic = '/camera/depth/image_rect_raw'
+    rows = [dict(topic=topic, stamp=t, wall_time=w, valid_fraction=q)
+            for t,w,q in [(10.1,2.,1.),(10.2,3.,0.),(10.3,4.1,1.)]]
+    zero = dict(wall_time=4., sim_time=10.51)
+    assert zero['sim_time'] - last_valid_sensor_stamp(rows,topic,10.,zero) > .40

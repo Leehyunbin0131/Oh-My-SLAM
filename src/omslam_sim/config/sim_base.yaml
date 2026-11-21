@@ -4,7 +4,7 @@ sim_base:
     left_radius: 0.068
     right_radius: 0.068
     wheel_separation: 0.480
-    max_rpm: 100.0
+    max_rpm: 35.0
     wheel_vx_variance: 0.0025
     wheel_wz_variance: 0.01
     clock_stall_timeout: 0.3

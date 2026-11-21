@@ -1,5 +1,6 @@
 #pragma once
 #include <mutex>
+#include <geometry_msgs/msg/transform.hpp>
 #include <nav2_costmap_2d/layer.hpp>
 #include <omm_perception_msgs/msg/obstacle_memory.hpp>
 #include <tf2/LinearMath/Vector3.hpp>
@@ -22,7 +23,8 @@ private:
   std::mutex mutex_;
   bool new_epoch_ = false;
   std::vector<tf2::Vector3> transformed_, archived_;
-  omm_perception_msgs::msg::ObstacleMemory::ConstSharedPtr snapshot_, accepted_;
+  omm_perception_msgs::msg::ObstacleMemory::ConstSharedPtr snapshot_, accepted_, projected_;
+  geometry_msgs::msg::Transform projection_tf_;
   rclcpp::Subscription<omm_perception_msgs::msg::ObstacleMemory>::SharedPtr sub_;
   rclcpp::JumpHandler::SharedPtr jump_handler_;
 };

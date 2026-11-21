@@ -164,3 +164,17 @@ def test_saturated_velocity_is_within_serial_rpm_limit(limit, vx, wz):
         assert wire[-1] == (round(left*100), sign*int(limit*100))
     with pytest.raises(drive_module.MotorError):
         drive.set_target_rpm(0., limit+.01)
+
+
+def test_out_of_order_final_preserves_original_lease_and_stop_epoch():
+    gate = CommandGate()
+    gate.activate(1000000000)
+    one, two = 1010000000, 1030000000
+    assert gate.requested(one, one-1000000, 4.01)
+    assert gate.requested(two, two, 4.03)
+    assert gate.final(one, .1, 0., two, 4.04)
+    assert gate.current(4.311) is None
+    assert gate.final(two, .1, 0., two, 4.312)
+    assert not gate.final(one, .1, 0., two, 4.313)
+    assert gate.final(two, 0., 0., two, 4.314)
+    assert not gate.final(two, .1, 0., two, 4.315)

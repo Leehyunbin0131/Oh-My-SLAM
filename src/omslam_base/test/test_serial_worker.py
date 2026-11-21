@@ -43,7 +43,7 @@ def test_serial_worker_uses_public_api_and_measured_feedback(monkeypatch, tmp_pa
             if self.n==4:stub.exit_event.set()
         def close(self):record('close')
     class Drive:
-        def __init__(self,client,config):
+        def __init__(self,client,config,*,clock):
             assert config is settings
             record('drive')
         def set_target_rpm(self,left,right,*,issued_at):record('target',left,right,issued_at)
@@ -203,3 +203,14 @@ def test_serial_worker_invalidates_delayed_arm_and_latches_idle_fault(monkeypatc
         node.exit_event.set()
         node.thread.join(2.)
     assert not node.thread.is_alive()
+
+
+def test_motor_log_preserves_latest_rotation(tmp_path):
+    from omslam_base.node import MotorLog
+    for mode, sample in [('ab', b'abcd'), ('a', 'abcd')]:
+        path = tmp_path / mode
+        log = MotorLog(path.open(mode), max_bytes=7)
+        for _ in range(3):
+            log.write(sample)
+        log.close()
+        assert path.read_bytes() == path.with_name(path.name + '.1').read_bytes() == b'abcd'

@@ -80,7 +80,7 @@ Rectangle {
             Label { text: "메모리" }
             Text { text: hud.resourceData.hostMemory || "—"; color: "#E8EEF6"; font.pixelSize: 12; Layout.alignment: Qt.AlignRight }
             Text { text: hud.resourceData.robotMemory || "—"; color: "#E8EEF6"; font.pixelSize: 12; Layout.alignment: Qt.AlignRight }
-            Label { text: "CPU 온도" }
+            Label { text: "센서 최고 온도" }
             Text { text: hud.resourceData.hostTemperature || "—"; color: "#E8EEF6"; font.pixelSize: 12; Layout.alignment: Qt.AlignRight }
             Text { text: hud.resourceData.robotTemperature || "—"; color: "#E8EEF6"; font.pixelSize: 12; Layout.alignment: Qt.AlignRight }
         }

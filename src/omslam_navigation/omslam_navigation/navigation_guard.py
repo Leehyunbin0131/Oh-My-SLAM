@@ -98,7 +98,7 @@ class NavigationGuard(Node):
                 raise ValueError(f'{key} must be finite and positive')
         if (self.p['max_linear_velocity'] > SIM_MAX_LINEAR_VELOCITY or
                 self.p['max_angular_velocity'] > 0.60):
-            raise ValueError('Simulation velocity limits exceed the 100 RPM profile')
+            raise ValueError('Simulation velocity limits exceed the configured simulation wheel limit')
         if self.p['manual_reverse_enabled'] and not (
                 self.p['operator_enabled'] and self.p['rear_observation_verified']):
             raise ValueError('manual reverse requires an explicitly verified rear-observation profile')
@@ -111,6 +111,8 @@ class NavigationGuard(Node):
             frame=self.p['base_frame'])
         self.core = (OperatorGate(limits, reverse_allowed=self.p['manual_reverse_enabled'])
                      if self.p['operator_enabled'] else NavigationGate(limits))
+        if self.p['operator_enabled']:
+            self.core.stop_deadlines = {k:self.p[k + '_timeout'] for k in ('wheel','odom')}
         self.operator = None
         self.observations = {}
         self.future_observations = {}
@@ -121,6 +123,7 @@ class NavigationGuard(Node):
         self.scan_pending = deque(maxlen=16)
         self.scan_tf = None
         self.map_valid = False
+        self.map_grid = None
         self.map_tf = None
         self.tf_received = {'map': None, 'odom': None}
         self.tf_publishers = []
@@ -137,6 +140,7 @@ class NavigationGuard(Node):
         self.operation = None
         self.base_transition = None
         self.cancel_call = None
+        self.cancel_retry_at = 0.
         self.cancel_attempted = None
         self.stop_error = ''
         self.tf_buffer = Buffer(cache_time=Duration(seconds=10.0), node=self)
@@ -232,6 +236,10 @@ class NavigationGuard(Node):
             self.memory_observation = self.health_observation = None
             self.tf_received = {'map': None, 'odom': None}
             self.map_valid = False
+            self.map_grid = None
+            if self.operator is not None:
+                self.operator.localization_initialized = False
+                self.operator.session_start_ns = stamp_ns(message.clock)
             self.last_original_stamp = 0
             self.publish_zero()
 
@@ -327,6 +335,7 @@ class NavigationGuard(Node):
                           math.isfinite(message.info.resolution) and message.info.resolution > 0 and
                           len(message.data) == message.info.width * message.info.height and
                           quaternion_valid(message.info.origin.orientation))
+        self.map_grid = message if self.map_valid else None
 
     def on_static_tf(self, message):
         for transform in message.transforms:
@@ -388,7 +397,7 @@ class NavigationGuard(Node):
         # min/max operations must never turn NaN or an invalid axis into input.
         if self.operator is not None and self.core._valid_twist(message.header.frame_id, twist_values(message)):
             message = deepcopy(message)
-            limited = self.core.limit_values(twist_values(message))
+            limited = self.core.limit_final(stamp_ns(message.header.stamp), twist_values(message))
             message.twist.linear.x, message.twist.angular.z = limited[0], limited[5]
         if self.core.final(stamp_ns(message.header.stamp), message.header.frame_id,
                            twist_values(message), self.now_ns(), time.monotonic()):
@@ -435,7 +444,7 @@ class NavigationGuard(Node):
                 if self.state_epochs[name] == epoch:
                     self.states[name] = (State.PRIMARY_STATE_UNKNOWN, wall)
                 del self.state_calls[name]
-        if wall - self.last_poll < 0.25:
+        if wall - self.last_poll < 0.5:
             return
         self.last_poll = wall
         for name, client in self.state_clients.items():
@@ -492,12 +501,16 @@ class NavigationGuard(Node):
                 except Exception:
                     rejected = True
                 if rejected and self.core.active_goals:
+                    self.cancel_attempted = None
+                    self.cancel_retry_at = wall + .5
                     self.stop_error = 'navigation action rejected cancellation'
                     self.core.fault(self.stop_error)
                     self.finish_operation(False, self.stop_error)
             elif wall - started >= self.p['service_timeout']:
                 self.cancel_client.remove_pending_request(future)
                 self.cancel_call = None
+                self.cancel_retry_at = wall + .5
+                self.cancel_attempted = None
                 self.stop_error = 'navigation cancellation response timed out'
                 self.core.fault(self.stop_error)
                 self.finish_operation(False, self.stop_error)
@@ -505,7 +518,8 @@ class NavigationGuard(Node):
             self.cancel_attempted = None
             return
         key = tuple(sorted(self.core.active_goals))
-        if self.cancel_call is None and self.cancel_attempted != key and self.cancel_client.service_is_ready():
+        if (self.cancel_call is None and self.cancel_attempted != key and
+                wall >= self.cancel_retry_at and self.cancel_client.service_is_ready()):
             self.cancel_attempted = key
             self.cancel_call = (self.cancel_client.call_async(CancelGoal.Request()), wall)
 
@@ -576,12 +590,16 @@ class NavigationGuard(Node):
         camera = self.observations.get('camera')
         if camera is None or not camera.valid or self.depth_geometry != self.camera_geometry:
             missing.append('depth and CameraInfo geometry mismatch')
-        if mode == 'AUTO' and not self.map_valid:
+        keepout_localization = (mode == 'MANUAL' and self.keepouts.polygons and
+                                self.p['localization_mode'] == 'amcl')
+        if keepout_localization and not self.operator.localization_initialized:
+            missing.append('금지 구역 확인을 위해 초기 위치 지정이 필요합니다')
+        if (mode == 'AUTO' or keepout_localization) and not self.map_valid:
             missing.append('valid map missing')
-        if mode == 'AUTO' and (self.map_tf is None or not 0 <= wall - self.map_tf[1] < self.p['map_tf_timeout']):
+        if (mode == 'AUTO' or keepout_localization) and (self.map_tf is None or not 0 <= wall - self.map_tf[1] < self.p['map_tf_timeout']):
             missing.append('map to odom transport stale')
         for name, received in self.tf_received.items():
-            if mode == 'MANUAL' and name == 'map':
+            if mode == 'MANUAL' and not keepout_localization and name == 'map':
                 continue
             if received is None or not 0 <= wall - received < 0.5:
                 missing.append(f'{name} transform transport stale')
@@ -606,14 +624,14 @@ class NavigationGuard(Node):
         required_servers = self.servers if mode == 'AUTO' else ['collision_monitor', 'velocity_smoother']
         for name in required_servers:
             state, received = self.states[name]
-            if state != State.PRIMARY_STATE_ACTIVE or wall - received >= 1.0:
+            if state != State.PRIMARY_STATE_ACTIVE or wall - received >= self.p['service_timeout']:
                 missing.append(f'{name} not confirmed active')
         base_state, base_seen = self.states['sim_base']
         allowed_base_states = (State.PRIMARY_STATE_INACTIVE, State.PRIMARY_STATE_ACTIVE)
         if ((self.operation is not None and self.operation['kind'] == 'enable') or
                 (self.operator is not None and self.operator.activating)):
             allowed_base_states += (State.TRANSITION_STATE_ACTIVATING,)
-        if base_state not in allowed_base_states or wall - base_seen >= 1.0:
+        if base_state not in allowed_base_states or wall - base_seen >= self.p['service_timeout']:
             missing.append('sim_base not configured')
         if self.core.armed and base_state != State.PRIMARY_STATE_ACTIVE:
             missing.append('sim_base not active')
@@ -691,7 +709,7 @@ class NavigationGuard(Node):
         self.last_state_signature, self.last_report = signature, wall
         snapshot = {
             'state': self.core.state, 'reason': self.core.reason,
-            'ready': not self.missing, 'healthy': self.core.healthy,
+            'ready': not self.missing and (self.core.armed or not self.core.arm_error(wall)), 'healthy': self.core.healthy,
             'epoch_ns': self.core.epoch_ns, 'goal_id': self.core.goal_id or '',
             'missing': self.missing, 'base_state': self.states['sim_base'][0],
             'restart_required': self.core.restart_required,

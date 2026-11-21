@@ -96,6 +96,19 @@ def test_amcl_save_command_does_not_launch_slam_saver(tmp_path):
     assert len(result.paths) == 2
     assert load_keepout_file(result.paths[1]) == ZONES
     assert not (tmp_path / 'saved.keepout.pending').exists()
+    saved = tmp_path / 'saved.yaml'
+    sidecar = saved.with_suffix('.keepout.json')
+    assert validate_map_bundle(saved) == saved
+    metadata = json.loads(saved.with_suffix('.metadata.json').read_text())
+    assert metadata['files']['keepout.json']['sha256']
+    original = sidecar.read_bytes()
+    sidecar.unlink()
+    with pytest.raises(ValueError, match='missing'):
+        validate_map_bundle(saved)
+    sidecar.write_bytes(original + b' ')
+    with pytest.raises(ValueError, match='hash'):
+        validate_map_bundle(saved)
+    assert validate_map_bundle(source) == source
 
 
 def test_invalid_saved_sidecar_rejects_mode_switch_before_stop(tmp_path):

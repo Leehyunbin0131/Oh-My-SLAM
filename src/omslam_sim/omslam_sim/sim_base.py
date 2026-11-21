@@ -88,7 +88,7 @@ class SimBase(LifecycleNode):
         now = time.monotonic()
         if (self.last_odom_at is None or not 0 <= now-self.last_odom_at < .4 or
                 self.last_odom_stamp is None or self.latest_clock is None or
-                not 0 <= self.latest_clock-self.last_odom_stamp < 300_000_000):
+                not -20_000_000 <= self.latest_clock-self.last_odom_stamp < 300_000_000):
             self.get_logger().error('Activation requires a fresh measured wheel odometry sample')
             return TransitionCallbackReturn.FAILURE
         try:

@@ -384,12 +384,12 @@ class LiveConsoleModel(ConsoleModel):
         self._pending = self._request = None
         self._speed_request = None
         self._speed_dirty = False
-        self._keepout_request = None
         self._neutral_epoch = None
         self.pending_mode = None
         self._halt_queue('제어 연결 종료')
         with self.s.lock:
             self.s.latest_manual = self.s.latest_heartbeat = None
+            self.s.drop_queued_requests()
             self.s.cancel_unsent_goal()
             self.s.controls = type(self.s.controls)(
                 ((kind, data) for kind, data in self.s.controls if kind in ('view', 'stop')),
@@ -840,10 +840,10 @@ class LiveConsoleModel(ConsoleModel):
         needs_pose = self._needs_initial_pose or reconnect_pose_needed
         result = d.get('goal_result', {})
         error = str(result.get('message', '')).lower()
-        no_path = (fresh and not operation and not self.queue_running
+        failed_goal = (fresh and not operation and not self.queue_running
             and result.get('_received', 0.) >= self._result_notice_after
-            and not result.get('success', False) and result.get('status') == 6
-            and any(text in error for text in ('no valid path', 'no path', 'failed to create a plan', 'failed to create plan')))
+            and not result.get('success', False) and result.get('status') == 6)
+        no_path = (failed_goal and (result.get('error_code') == 208 or any(text in error for text in ('no valid path', 'no path', 'failed to create a plan', 'failed to create plan'))))
         if not connected:
             movement = 'disconnected' if d.get('topics') else 'not_connected'
         elif not fresh or operation or phase == 'TRANSITION':
@@ -854,14 +854,14 @@ class LiveConsoleModel(ConsoleModel):
             movement = 'map_required'
         elif no_path:
             movement = 'no_path'
-        elif phase == 'BLOCKED' or owner_busy or self.read_only:
+        elif failed_goal or phase == 'BLOCKED' or owner_busy or self.read_only:
             movement = 'blocked'
         else:
             movement = 'ready'
         reason = ('관측 연결 · 실물 구동 미허용' if self.read_only else
                   op.get('reason', '제어 서버를 기다리는 중입니다') if fresh else
                   '최신 제어 상태를 기다리는 중입니다')
-        if no_path:
+        if failed_goal:
             reason = result.get('message', reason)
         elif needs_pose:
             reason = '현재 로봇의 위치·방향을 지도에서 지정하세요. AMCL 위치 관측을 기다리는 중입니다'
@@ -917,6 +917,7 @@ class LiveConsoleModel(ConsoleModel):
         if self._page == 1 and now - self._last_debug > 2.:
             self._last_debug = now
             # No owner tokens or request payloads belong in operator logs.
+            details = []
             groups = [('구동', ('motor', 'joints')), ('IMU', ('imu', 'imu_base')),
                 ('속도', ('velocity',)), ('주행', ('navigation', 'goal_feedback')),
                 ('인지', ('memory', 'health')), ('라이다', ('scan_info',)),
@@ -924,13 +925,14 @@ class LiveConsoleModel(ConsoleModel):
             for title, keys in groups:
                 snapshot = {key: d.get(key) for key in keys if d.get(key)}
                 if snapshot:
-                    self.s.event('[상세][' + title + '] ' + json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')))
+                    details.append('[상세][' + title + '] ' + json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')))
             snapshot = {'host': d.get('host'), 'domain': d.get('domain'), 'diagnostics': diagnostics,
                 'freshTopics': {topic: self._fresh(topic, 3. if topic == '/diagnostics' else .8) for topic in d['topics']}}
-            self.s.event('[상세][시스템] ' + json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')))
+            details.append('[상세][시스템] ' + json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')))
+            self._detail_logs = [dict(time=time.strftime('%H:%M:%S'), count=1, level='상세', message=line) for line in details]
         with self.s.lock:
             ui['logs'] = ([dict(row, level='상세' if row['message'].startswith('[상세]') else '정보')
-                for row in self.s.data['events'][:200]] if self._page == 1 else [])
+                for row in self.s.data['events'][:200]] + getattr(self, '_detail_logs', []) if self._page == 1 else [])
         d.update(operatorConnected=fresh, connected=connected, ownerSelf=self.owner,
                  hasToken=bool(self.token), goalActive=self.s.goal_active,
                  actualV=ui['linearVelocity'], actualW=ui['angularVelocity'], operatorReason=reason)

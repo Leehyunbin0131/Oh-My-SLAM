@@ -3,6 +3,7 @@
 #include "omm_perception/node.hpp"
 #include "omm_perception/self_mask.hpp"
 #include "omm_perception/tracker.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cv_bridge/cv_bridge.hpp>
@@ -106,10 +107,18 @@ public:
     depth_sub_ = create_subscription<sensor_msgs::msg::Image>(
         "/camera/depth/image_rect_raw", depth_qos,
         [this](sensor_msgs::msg::Image::ConstSharedPtr m) {
-          if (pending_depth_ && pending_depth_->header.stamp != m->header.stamp)
+          checkSession();
+          const auto stamp = rclcpp::Time(m->header.stamp);
+          auto pos = std::lower_bound(pending_depth_.begin(), pending_depth_.end(), stamp,
+              [](const auto &entry, const auto &t) {return rclcpp::Time(entry.first->header.stamp) < t;});
+          if (pos != pending_depth_.end() && pos->first->header.stamp == m->header.stamp)
+            return;
+          pending_depth_.emplace(pos, m, std::chrono::steady_clock::now());
+          if (pending_depth_.size() > 8) {
+            pending_depth_.pop_front();
             memory_.interruptFreeEvidence();
-          pending_depth_.reset();
-          depth(m);
+          }
+          retryPendingDepth();
         });
     timer_ = create_wall_timer(std::chrono::milliseconds(100),
                                [this] { publishMemory(); });
@@ -119,7 +128,7 @@ private:
   void checkSession() {
     const double now = get_clock()->now().seconds();
     if (reset_pending_.exchange(false) || now < last_clock_) {
-      pending_depth_.reset();
+      pending_depth_.clear();
       info_.reset();
       imu_history_.clear();
       tracker_.reset();
@@ -202,17 +211,16 @@ private:
     return result;
   }
   void retryPendingDepth() {
-    if (!pending_depth_)
-      return;
-    auto pending = pending_depth_;
-    const auto received = pending_depth_received_;
-    pending_depth_.reset();
-    depth(pending, received);
+    while (!pending_depth_.empty()) {
+      auto entry = pending_depth_.front();
+      if (!depth(entry.first, entry.second))
+        break;
+      pending_depth_.pop_front();
+    }
   }
-  void depth(const sensor_msgs::msg::Image::ConstSharedPtr &msg,
-             std::chrono::steady_clock::time_point received =
-                 std::chrono::steady_clock::now()) {
-    checkSession();
+  // A false result keeps the frame in timestamp order until alignment or expiry.
+  bool depth(const sensor_msgs::msg::Image::ConstSharedPtr &msg,
+             std::chrono::steady_clock::time_point received) {
     const double stamp = rclcpp::Time(msg->header.stamp).seconds(),
                  now = get_clock()->now().seconds();
     // Invalid, missing, duplicate, future or stale frames never provide
@@ -230,22 +238,18 @@ private:
         !std::isfinite(info_->k[5]) || info_->k[0] <= 0 || info_->k[4] <= 0) {
       if (stamp > last_stamp_)
         memory_.interruptFreeEvidence();
-      return;
+      return true;
     }
     if (stamp > now) {
-      pending_depth_ = msg;
-      pending_depth_received_ = received;
       healthy_ = previous_health;
       status_ = "waiting_for_clock";
-      return;
+      return false;
     }
     auto imu = alignedImu(stamp);
     if (require_imu_ && !imu) {
-      pending_depth_ = msg;
-      pending_depth_received_ = received;
       healthy_ = previous_health;
       status_ = "waiting_for_synchronized_imu";
-      return;
+      return false;
     }
     bool managing_memory = false;
     try {
@@ -257,7 +261,7 @@ private:
             ->image.convertTo(depth_image, CV_32FC1, .001);
       else {
         memory_.interruptFreeEvidence();
-        return;
+        return true;
       }
       auto memory_from_camera = eigenTransform(
           buffer_
@@ -316,7 +320,7 @@ private:
       // A dead image must not turn the entire remembered scene into free space.
       if (valid < 100 || valid < total * .05) {
         memory_.interruptFreeEvidence();
-        return;
+        return true;
       }
       healthy_ = true;
       const bool recent_floor = geometry_healthy_ && stamp - last_stamp_ < timeout_;
@@ -327,7 +331,7 @@ private:
       if (!ground.valid) {
         memory_.interruptFreeEvidence();
         status_ = "ground_not_established";
-        return;
+        return true;
       }
       last_floor_ = ground;
       for (const auto &b : base_points) {
@@ -386,6 +390,7 @@ private:
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
                            "Camera observation rejected: %s", e.what());
     }
+    return true;
   }
   void publishMemory() {
     checkSession();
@@ -527,8 +532,8 @@ private:
   builtin_interfaces::msg::Time last_observation_;
   sensor_msgs::msg::CameraInfo::ConstSharedPtr info_;
   std::deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_history_;
-  sensor_msgs::msg::Image::ConstSharedPtr pending_depth_;
-  std::chrono::steady_clock::time_point pending_depth_received_;
+  std::deque<std::pair<sensor_msgs::msg::Image::ConstSharedPtr,
+                       std::chrono::steady_clock::time_point>> pending_depth_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;

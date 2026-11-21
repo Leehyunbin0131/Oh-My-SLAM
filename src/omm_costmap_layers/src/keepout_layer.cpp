@@ -33,7 +33,12 @@ bool valid(const omslam_operator_msgs::msg::KeepoutZones &m) {
       x0=std::min(x0,double(v.x));x1=std::max(x1,double(v.x));
       y0=std::min(y0,double(v.y));y1=std::max(y1,double(v.y));
     }
-    if(x1-x0<.05-1e-6||y1-y0<.05-1e-6) return false;
+    auto minimum_width = [](double lo, double hi) {
+      const float bound = static_cast<float>(std::max(std::abs(lo),std::abs(hi)));
+      const double spacing = std::nextafter(bound, std::numeric_limits<float>::infinity()) - bound;
+      return .05 - std::clamp(spacing, 1e-6, .0001);
+    };
+    if (x1-x0 < minimum_width(x0,x1) || y1-y0 < minimum_width(y0,y1)) return false;
     // Require canonical order; malformed/bow-tie geometry cannot clear marks.
     const double xs[]={x0,x1,x1,x0},ys[]={y0,y0,y1,y1};
     for(size_t i=0;i<4;++i)
@@ -74,7 +79,7 @@ void KeepoutLayer::updateBounds(double,double,double,double *min_x,double *min_y
       if(!msg->polygons.empty() && layered_costmap_->getGlobalFrameID()!=msg->header.frame_id) {
         auto stamped=tf_->lookupTransform(layered_costmap_->getGlobalFrameID(),msg->header.frame_id,tf2::TimePointZero);
         const double age=(clock_->now()-rclcpp::Time(stamped.header.stamp)).seconds();
-        if(age>0.5||age < -1.0) throw std::runtime_error("Keepout transform is stale");
+        if(rclcpp::Time(stamped.header.stamp).nanoseconds()!=0 && (age>0.5||age < -1.0)) throw std::runtime_error("Keepout transform is stale");
         tf2::fromMsg(stamped.transform,transform);
         if(!std::isfinite(transform.getOrigin().x())||!std::isfinite(transform.getOrigin().y())||
            !std::isfinite(transform.getRotation().length2())||transform.getRotation().length2()<.25)

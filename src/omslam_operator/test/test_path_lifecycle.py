@@ -19,7 +19,7 @@ def fixture():
         return accepted
     receiver = SimpleNamespace(s=shared, path_debug_pub=None,
         get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=clock[0])),
-        navigate=SimpleNamespace(server_is_ready=lambda: True, send_goal_async=send),
+        pending_samples={}, navigate=SimpleNamespace(server_is_ready=lambda: True, send_goal_async=send),
         project=lambda points, frame, stamp: points)
     receiver.assign=lambda *args: ConsoleNode.assign(receiver, *args)
     receiver.debug_event=lambda *args, **kwargs: None

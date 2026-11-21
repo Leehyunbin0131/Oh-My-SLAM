@@ -76,6 +76,7 @@ void ObstacleMemoryLayer::prepareProjection() {
     // Old marks are already in the update bounds for clearing. The jump
     // callback discarded messages received before the new clock epoch.
     accepted_.reset();
+    projected_.reset();
     transformed_.clear();
     archived_.clear();
   }
@@ -93,7 +94,7 @@ void ObstacleMemoryLayer::prepareProjection() {
         (published >= rclcpp::Time(accepted_->header.stamp) &&
          observation >= rclcpp::Time(accepted_->observation_stamp));
     current_ = msg->sensor_healthy && msg->geometry_healthy && msg->memory_healthy &&
-        age >= 0 && age < timeout_ && transport_age >= 0 && transport_age < timeout_ &&
+        age >= -0.02 && age < timeout_ && transport_age >= -0.02 && transport_age < timeout_ &&
         observation.nanoseconds() > 0 && observation <= published && ordered &&
         msg->header.frame_id == memory_frame_ &&
         std::isfinite(msg->voxel_size) && msg->voxel_size > 0 &&
@@ -126,6 +127,7 @@ void ObstacleMemoryLayer::prepareProjection() {
       if (!std::isfinite(tf.getOrigin().x()) || !std::isfinite(tf.getOrigin().y()) ||
           !std::isfinite(tf.getRotation().length2()) || tf.getRotation().length2() < .25)
         throw std::runtime_error("Invalid memory transform");
+      if (projected_ == accepted_ && projection_tf_ == transform.transform) return;
       std::vector<tf2::Vector3> points, archived;
       points.reserve(accepted_->points.size());
       archived.reserve(accepted_->archived_points.size());
@@ -133,6 +135,19 @@ void ObstacleMemoryLayer::prepareProjection() {
         points.push_back(tf * tf2::Vector3(p.x, p.y, p.z));
       for (const auto &p : accepted_->archived_points)
         archived.push_back(tf * tf2::Vector3(p.x, p.y, p.z));
+      auto unique_xy = [](auto & values) {
+        auto less = [](const auto & a,const auto & b) {
+          return a.x() == b.x() ? a.y() < b.y() : a.x() < b.x();
+        };
+        std::sort(values.begin(),values.end(),less);
+        values.erase(std::unique(values.begin(),values.end(),[](const auto & a,const auto & b) {
+          return a.x() == b.x() && a.y() == b.y();
+        }),values.end());
+      };
+      unique_xy(points);
+      unique_xy(archived);
+      projected_ = accepted_;
+      projection_tf_ = transform.transform;
       transformed_ = std::move(points);
       archived_ = std::move(archived);
       radius_ = padding_ + .5 * accepted_->voxel_size;

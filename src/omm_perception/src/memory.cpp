@@ -15,6 +15,12 @@ struct Statement {
     if (sqlite3_prepare_v2(db, sql, -1, &p, nullptr) != SQLITE_OK)
       throw std::runtime_error(sqlite3_errmsg(db));
   }
+  bool row() {
+    const int result = sqlite3_step(p);
+    if (result == SQLITE_ROW) return true;
+    if (result == SQLITE_DONE) return false;
+    throw std::runtime_error(sqlite3_errmsg(sqlite3_db_handle(p)));
+  }
   ~Statement() { sqlite3_finalize(p); }
   Statement(const Statement &) = delete;
   Statement &operator=(const Statement &) = delete;
@@ -119,7 +125,7 @@ void Memory::compactArchive() const {
   }
 }
 void Memory::store(const std::array<int, 3> &key, const Voxel &v,
-                   sqlite3_stmt *statement, bool existing) {
+                   sqlite3_stmt *statement) {
   // The caller owns one prepared statement for the whole transaction. Reset
   // before rebinding; finalization on every exception is handled by Statement.
   if (sqlite3_reset(statement) != SQLITE_OK)
@@ -134,8 +140,7 @@ void Memory::store(const std::array<int, 3> &key, const Voxel &v,
   sqlite3_bind_int64(statement, 10, v.last_free_frame);
   if (sqlite3_step(statement) != SQLITE_DONE)
     throw std::runtime_error(sqlite3_errmsg(archive_));
-  if (!existing)
-    archiveAdded(key, v.point.z());
+
 }
 bool Memory::observe(const std::vector<Eigen::Vector3d> &points, double stamp,
                      uint64_t owner) {
@@ -154,6 +159,9 @@ bool Memory::observe(const std::vector<Eigen::Vector3d> &points, double stamp,
   Statement erase(archive_, "DELETE FROM voxels WHERE kx=? AND ky=? AND kz=?");
   Statement previous(archive_,
                      "SELECT owner FROM voxels WHERE kx=? AND ky=? AND kz=?");
+  std::vector<std::pair<std::array<int, 3>, Voxel>> active;
+  std::vector<std::array<int, 3>> removed;
+  active.reserve(frame.size());
   const bool has_archive = archivedCount() > 0;
   Transaction transaction(archive_);
   for (const auto &[key, value] : frame) {
@@ -164,14 +172,14 @@ bool Memory::observe(const std::vector<Eigen::Vector3d> &points, double stamp,
     if (has_archive && old == voxels_.end()) {
       for (int i = 0; i < 3; ++i)
         sqlite3_bind_int(previous.p, i + 1, key[i]);
-      if (sqlite3_step(previous.p) == SQLITE_ROW) {
+      if (previous.row()) {
         if (uint64_t(sqlite3_column_int64(previous.p, 0)) != owner)
           assigned = 0;
-        archiveRemoved(key);
+        removed.push_back(key);
       }
       sqlite3_reset(previous.p);
     }
-    voxels_.insert_or_assign(key, Voxel{value.first / value.second, stamp, 0,
+    active.emplace_back(key, Voxel{value.first / value.second, stamp, 0,
                                         Visibility::Visible, assigned});
     if (has_archive) {
       for (int i = 0; i < 3; ++i)
@@ -182,14 +190,16 @@ bool Memory::observe(const std::vector<Eigen::Vector3d> &points, double stamp,
     }
   }
   transaction.commit();
+  for (const auto &key : removed) archiveRemoved(key);
+  for (const auto &[key,v] : active) voxels_.insert_or_assign(key,v);
   // Overflow is archived, not silently discarded or reported as sensor failure.
   if (voxels_.size() > max_voxels_)
     recenter(center_, active_radius_);
   return true;
 }
 void Memory::recenter(const Eigen::Vector3d &center, double radius) {
-  center_ = center;
-  active_radius_ = radius;
+  std::vector<std::array<int, 3>> evicted;
+  std::vector<std::pair<std::array<int, 3>, Voxel>> restored;
   std::vector<std::pair<double, std::array<int, 3>>> ordered;
   ordered.reserve(voxels_.size());
   for (const auto &[key, v] : voxels_)
@@ -204,15 +214,17 @@ void Memory::recenter(const Eigen::Vector3d &center, double radius) {
     if (i >= max_voxels_ || ordered[i].first > radius * radius) {
       auto it = voxels_.find(ordered[i].second);
       store(it->first, it->second, insert.p);
-      voxels_.erase(it);
+      evicted.push_back(it->first);
     }
   // Reload precise observations on re-entry. Archived areas were never labelled
   // free.
-  if (voxels_.size() < max_voxels_) {
+  const size_t available = max_voxels_ - (voxels_.size() - evicted.size());
+  if (available && archive_count_) {
     Statement s(archive_,
                 "SELECT kx,ky,kz,x,y,z,stamp,free,owner,last_free_frame FROM voxels WHERE x "
                 "BETWEEN ?1 AND ?2 AND y BETWEEN ?3 AND ?4 AND "
-                "(x-?5)*(x-?5)+(y-?6)*(y-?6) <= ?7 LIMIT ?8");
+                "(x-?5)*(x-?5)+(y-?6)*(y-?6) <= ?7 "
+                "ORDER BY (x-?5)*(x-?5)+(y-?6)*(y-?6),kx,ky,kz LIMIT ?8");
     sqlite3_bind_double(s.p, 1, center.x() - radius);
     sqlite3_bind_double(s.p, 2, center.x() + radius);
     sqlite3_bind_double(s.p, 3, center.y() - radius);
@@ -220,9 +232,9 @@ void Memory::recenter(const Eigen::Vector3d &center, double radius) {
     sqlite3_bind_double(s.p, 5, center.x());
     sqlite3_bind_double(s.p, 6, center.y());
     sqlite3_bind_double(s.p, 7, radius * radius);
-    sqlite3_bind_int64(s.p, 8, max_voxels_ - voxels_.size());
+    sqlite3_bind_int64(s.p, 8, available);
     std::vector<std::array<int, 3>> loaded;
-    while (sqlite3_step(s.p) == SQLITE_ROW) {
+    while (s.row()) {
       Eigen::Vector3d p(sqlite3_column_double(s.p, 3),
                         sqlite3_column_double(s.p, 4),
                         sqlite3_column_double(s.p, 5));
@@ -231,7 +243,7 @@ void Memory::recenter(const Eigen::Vector3d &center, double radius) {
                              sqlite3_column_int(s.p, 2)};
       const auto last_free = uint64_t(sqlite3_column_int64(s.p, 9));
       const int votes = last_free == clear_frame_ ? sqlite3_column_int(s.p, 7) : 0;
-      voxels_.insert_or_assign(
+      restored.emplace_back(
           key, Voxel{p, sqlite3_column_double(s.p, 6), votes, Visibility::Uncertain,
                      uint64_t(sqlite3_column_int64(s.p, 8)), last_free});
       loaded.push_back(key);
@@ -244,15 +256,38 @@ void Memory::recenter(const Eigen::Vector3d &center, double radius) {
       if (sqlite3_step(erase.p) != SQLITE_DONE)
         throw std::runtime_error(sqlite3_errmsg(archive_));
       sqlite3_reset(erase.p);
-      archiveRemoved(key);
+
     }
   }
   transaction.commit();
+  center_ = center;
+  active_radius_ = radius;
+  for (const auto &key : evicted) {
+    archiveAdded(key, voxels_.at(key).point.z());
+    voxels_.erase(key);
+  }
+  for (const auto &[key, voxel] : restored) {
+    archiveRemoved(key);
+    voxels_.insert_or_assign(key, voxel);
+  }
 }
 size_t Memory::archivedCount() const { return archive_count_; }
 std::pair<double, std::vector<Eigen::Vector3d>>
 Memory::archiveProjection(size_t max_cells) const {
   archive_budget_ = std::max(size_t(4), max_cells);
+  if (archive_factor_ > 2 && archive_count_ <= archive_budget_ / 2) {
+    decltype(archive_bins_) fine;
+    Statement rows(archive_, "SELECT kx,ky,z FROM voxels");
+    while (rows.row()) {
+      auto &bin = fine[{floorDivide(sqlite3_column_int(rows.p,0),2),
+                        floorDivide(sqlite3_column_int(rows.p,1),2),0}];
+      double z = sqlite3_column_double(rows.p,2);
+      bin.min_z = bin.count ? std::min(bin.min_z,z) : z;
+      ++bin.count;
+    }
+    archive_bins_.swap(fine);
+    archive_factor_ = 2;
+  }
   compactArchive();
   std::vector<Eigen::Vector3d> points;
   points.reserve(archive_bins_.size());
@@ -265,21 +300,25 @@ Memory::archiveProjection(size_t max_cells) const {
 void Memory::removeOwner(uint64_t owner) {
   if (!owner)
     return;
-  for (auto it = voxels_.begin(); it != voxels_.end();)
-    if (it->second.owner == owner)
-      it = voxels_.erase(it);
-    else
-      ++it;
+  std::vector<std::array<int, 3>> removed;
+  Transaction transaction(archive_);
   Statement query(archive_, "SELECT kx,ky,kz FROM voxels WHERE owner=?");
   sqlite3_bind_int64(query.p, 1, owner);
-  while (sqlite3_step(query.p) == SQLITE_ROW)
-    archiveRemoved({sqlite3_column_int(query.p, 0),
+  while (query.row())
+    removed.push_back({sqlite3_column_int(query.p, 0),
                     sqlite3_column_int(query.p, 1),
                     sqlite3_column_int(query.p, 2)});
   Statement s(archive_, "DELETE FROM voxels WHERE owner=?");
   sqlite3_bind_int64(s.p, 1, owner);
   if (sqlite3_step(s.p) != SQLITE_DONE)
     throw std::runtime_error(sqlite3_errmsg(archive_));
+  transaction.commit();
+  for (const auto &key : removed) archiveRemoved(key);
+  for (auto it = voxels_.begin(); it != voxels_.end();)
+    if (it->second.owner == owner)
+      it = voxels_.erase(it);
+    else
+      ++it;
 }
 void Memory::clearVisible(const cv::Mat &depth, const Intrinsics &k,
                           const Eigen::Isometry3d &camera_from_memory,
@@ -289,30 +328,21 @@ void Memory::clearVisible(const cv::Mat &depth, const Intrinsics &k,
   // are reset by the node before accepting observations in the new session.
   if (!std::isfinite(stamp) || stamp <= last_clear_stamp_)
     return;
-  if (stamp - last_clear_stamp_ > max_gap)
-    interruptFreeEvidence();
-  ++clear_frame_;
-  last_clear_stamp_ = stamp;
+  const auto frame = clear_frame_ + (stamp - last_clear_stamp_ > max_gap ? 2 : 1);
   auto update = [&](Voxel &v) {
     if (v.last_seen == stamp)
       return false;
     v.visibility =
         visibility(camera_from_memory * v.point, depth, k, margin, near, far);
     if (v.visibility == Visibility::Free) {
-      v.free_frames = v.last_free_frame + 1 == clear_frame_ ? v.free_frames + 1 : 1;
-      v.last_free_frame = clear_frame_;
+      v.free_frames = v.last_free_frame + 1 == frame ? v.free_frames + 1 : 1;
+      v.last_free_frame = frame;
     } else {
       v.free_frames = 0;
       v.last_free_frame = 0;
     }
     return v.free_frames >= frames && stamp - v.last_seen >= .2;
   };
-  for (auto it = voxels_.begin(); it != voxels_.end();)
-    if (update(it->second)) {
-      it = voxels_.erase(it);
-      ++cleared_;
-    } else
-      ++it;
   Eigen::Vector3d camera = camera_from_memory.inverse().translation();
   Statement s(archive_, "SELECT kx,ky,kz,x,y,z,stamp,free,owner,last_free_frame FROM voxels "
                         "WHERE x BETWEEN ? AND ? AND y BETWEEN ? AND ?");
@@ -322,7 +352,7 @@ void Memory::clearVisible(const cv::Mat &depth, const Intrinsics &k,
   sqlite3_bind_double(s.p, 4, camera.y() + far);
   std::vector<std::pair<std::array<int, 3>, Voxel>> retained;
   std::vector<std::array<int, 3>> deleted;
-  while (sqlite3_step(s.p) == SQLITE_ROW) {
+  while (s.row()) {
     std::array<int, 3> key{sqlite3_column_int(s.p, 0),
                            sqlite3_column_int(s.p, 1),
                            sqlite3_column_int(s.p, 2)};
@@ -336,7 +366,7 @@ void Memory::clearVisible(const cv::Mat &depth, const Intrinsics &k,
     const auto previous_free_frame = v.last_free_frame;
     if (update(v)) {
       deleted.push_back(key);
-      ++cleared_;
+
     } else if (previous_free_frame != v.last_free_frame)
       retained.push_back({key, v});
   }
@@ -344,7 +374,7 @@ void Memory::clearVisible(const cv::Mat &depth, const Intrinsics &k,
   Statement insert(archive_,
                    "INSERT OR REPLACE INTO voxels VALUES(?,?,?,?,?,?,?,?,?,?)");
   for (const auto &[key, v] : retained)
-    store(key, v, insert.p, true);
+    store(key, v, insert.p);
   Statement erase(archive_, "DELETE FROM voxels WHERE kx=? AND ky=? AND kz=?");
   for (const auto &key : deleted) {
     for (int i = 0; i < 3; ++i)
@@ -352,9 +382,20 @@ void Memory::clearVisible(const cv::Mat &depth, const Intrinsics &k,
     if (sqlite3_step(erase.p) != SQLITE_DONE)
       throw std::runtime_error(sqlite3_errmsg(archive_));
     sqlite3_reset(erase.p);
-    archiveRemoved(key);
+
   }
   transaction.commit();
+  last_clear_stamp_ = stamp;
+  clear_frame_ = frame;
+  for (const auto &key : deleted) archiveRemoved(key);
+  cleared_ += deleted.size();
+  for (auto it = voxels_.begin(); it != voxels_.end();)
+    if (update(it->second)) {
+      it = voxels_.erase(it);
+      ++cleared_;
+    } else
+      ++it;
+
 }
 void Memory::reset() {
   execute(archive_, "DELETE FROM voxels");

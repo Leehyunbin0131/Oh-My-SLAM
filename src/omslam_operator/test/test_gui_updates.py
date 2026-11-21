@@ -64,7 +64,7 @@ def test_grid_snapshot_keeps_occupancy_and_exact_display_palette(key, values, ex
         model.setGoal(.05, .05, 0.)
         assert not model.goal['valid'] and '관측되지' in model.goal['reason']
         model.setGoal(.15, .05, 0.)
-        assert model.goal['valid']
+        assert not model.goal['valid'] and '범위' in model.goal['reason']
         model.setGoal(.45, .05, 0.)
         assert not model.goal['valid'] and '점유' in model.goal['reason']
         model.deleteLater()
@@ -197,13 +197,13 @@ def test_goal_changes_and_action_terminal_rows_have_dedicated_notifications(disp
     f = display
     updates = []
     f.model.goalsChanged.connect(lambda: updates.append([dict(g) for g in f.model.goals]))
-    f.model.addWaypoint(.3, .4, .5)
+    f.model.addWaypoint(.65, .65, .5)
     first = f.model.goals[0]['uid']
     assert updates[-1][0]['uid'] == first
     f.model.addWaypoint(.7, .6, .1)
     f.model.moveWaypoint(0, 1)
     assert updates[-1][1]['uid'] == first
-    f.model.editWaypoint(1, .4, .5, 1.)
+    f.model.editWaypoint(1, .65, .65, 1.)
     assert updates[-1][1]['yaw'] == 1.
     f.model.queue_waiting, f.model.queue_index = True, 1
     f.model.queue[1]['status'] = '이동 중'

@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer, Qt
 from omslam_operator_msgs.msg import ManualCommand, OwnerHeartbeat
 from .geometry import world_grid
+from omslam_navigation.keepouts import grid_goal_error, pose_allowed
 from .presentation import presentation_snapshot
 
 
@@ -123,6 +124,7 @@ class ConsoleModel(QObject):
     def stop(self):
         self.clearInput();self._halt_queue('정지 요청')
         with self.s.lock:
+            self.s.drop_queued_requests()
             self.s.cancel_unsent_goal()
             self.s.controls.clear();self.s.controls.appendleft(('stop',{}))
         self.s.event('정지·구동해제 요청')
@@ -140,10 +142,19 @@ class ConsoleModel(QObject):
             with self.s.lock:grid=self.s.map_layers.get('map')
             if not grid:valid=False;reason='지도를 기다리는 중입니다'
             else:
-                a,b=world_grid(x,y,grid['resolution'],grid['origin']);a,b=math.floor(a),math.floor(b)
-                if not (0<=a<grid['width'] and 0<=b<grid['height']):valid=False;reason='지도 밖의 목표입니다'
-                elif grid['cells'][b,a]<0:valid=False;reason='관측되지 않은 목표입니다'
-                elif grid['cells'][b,a]>=65:valid=False;reason='점유된 위치입니다'
+                u, v = world_grid(x, y, grid['resolution'], grid['origin'])
+                i, j = math.floor(u), math.floor(v)
+                if not (0 <= i < grid['width'] and 0 <= j < grid['height']):
+                    reason = '지도 밖의 목표입니다'
+                elif grid['cells'][j, i] < 0:
+                    reason = '관측되지 않은 목표입니다'
+                elif grid['cells'][j, i] >= 65:
+                    reason = '점유된 목표입니다'
+                reason = reason or grid_goal_error(x, y, yaw, grid['origin'], grid['resolution'],
+                                         grid['width'], grid['height'], grid['cells'].ravel())
+                if not reason and not pose_allowed(getattr(self, '_keepout_polygons', []), x, y, yaw):
+                    reason = '차체가 진입 금지 구역과 겹칩니다'
+                valid = not reason
         self._goal={'x':float(x),'y':float(y),'yaw':float(yaw),'valid':valid,'reason':reason or '위치·도착 방향 확인 후 이동 시작'}
         self.changed.emit()
 
@@ -195,7 +206,15 @@ class ConsoleModel(QObject):
 
     @Slot()
     def cancel(self):
-        self._halt_queue('취소 요청');self.command('cancel',{});self.s.event('현재 목표 취소 요청')
+        self._halt_queue('취소 요청')
+        with self.s.lock:
+            self.s.cancel_request = self.s.goal_request
+            self.s.cancel_unsent_goal()
+            self.s.controls = type(self.s.controls)(
+                ((k, d) for k, d in self.s.controls if k != 'navigate'), maxlen=self.s.controls.maxlen)
+            if self.s.goal_phase != 'terminal':
+                self.command('cancel',{'request_id':self.s.goal_request})
+        self.s.event('현재 목표 취소 요청')
 
     def _halt_queue(self,reason):
         # Stop permission to advance, but retain the in-flight result/stop observer.

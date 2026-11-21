@@ -1,9 +1,9 @@
 """Steady watchdog around simulator time and the shared command lease."""
 import math
-from omslam_base.core import CommandGate, Geometry
+from omslam_base.core import CLOCK_SKEW_S, CommandGate, Geometry
 
 
-SIM_MAX_WHEEL_RPM = 100.
+SIM_MAX_WHEEL_RPM = 35.
 SIM_MAX_LINEAR_VELOCITY = Geometry().left_radius * math.pi / 30 * SIM_MAX_WHEEL_RPM
 
 
@@ -75,7 +75,7 @@ class SimCommandGuard:
             return 0., 0.
         vx, wz, issued = target
         # Reject simulation-time expiry too: a speed-up must not lengthen lease.
-        if self.target_stamp is None or not 0 <= (self.sim_ns-self.target_stamp)*1e-9 < self.gate.TIMEOUT:
+        if self.target_stamp is None or not -CLOCK_SKEW_S <= (self.sim_ns-self.target_stamp)*1e-9 < self.gate.TIMEOUT:
             self.gate.target = None
             return 0., 0.
         try:

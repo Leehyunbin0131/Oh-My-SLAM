@@ -8,7 +8,7 @@ import uuid
 
 from action_msgs.msg import GoalStatus
 from lifecycle_msgs.msg import State, Transition
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav2_msgs.action import NavigateToPose
 from nav2_msgs.msg import SpeedLimit
 from omslam_operator_msgs.action import OperatorNavigate
@@ -55,7 +55,7 @@ class OperatorControl:
         self.state_pub = node.create_publisher(OperatorState, '/operator/state', transient)
         if node.p['localization_mode'] == 'amcl':
             self.pose_sub = node.create_subscription(PoseWithCovarianceStamped, '/amcl_pose',
-                                                      self.amcl_pose, 1)
+                                                      self.amcl_pose, transient)
         self.speed_pub = node.create_publisher(SpeedLimit, '/speed_limit', 1)
         self.control_service = node.create_service(Control, '/operator/control', self.control,
                                                     callback_group=self.group)
@@ -139,6 +139,11 @@ class OperatorControl:
             if output.twist.linear.x == 0 and output.twist.angular.z == 0:
                 self.node.publish_zero()
         elif authorized:
+            if self.core.mode == 'MANUAL' and not message.deadman:
+                zero = TwistStamped()
+                zero.header.stamp = self.node.get_clock().now().to_msg()
+                zero.header.frame_id = self.node.p['base_frame']
+                self.node.requested_pub.publish(zero)
             self.node.publish_zero()
 
     def response_values(self, success, message):
@@ -290,6 +295,12 @@ class OperatorControl:
         result.internal_goal_id = uid.hex
         result.status = GoalStatus.STATUS_ABORTED
         try:
+            if handle.is_cancel_requested:
+                result.status, result.message = GoalStatus.STATUS_CANCELED, 'goal canceled before dispatch'
+                handle.canceled()
+                return result
+            if not self.node.keepouts.goal_allowed(request.pose.pose):
+                raise RuntimeError('목표의 차체가 현재 지도 또는 금지 구역과 겹칩니다')
             if (not self.authorized(request.token, request.epoch) or
                     not self.core.register_goal(uid.hex, self.node.now_ns(), time.monotonic())):
                 raise RuntimeError('owner or goal boundary changed before dispatch')
@@ -316,6 +327,7 @@ class OperatorControl:
                 nav.cancel_goal_async()
             wrapped = await self.wait_for(nav.get_result_async(), timeout=3600.0,
                                            owner=(request.token, request.epoch))
+            result.error_code = wrapped.result.error_code
             result.status = wrapped.status
             result.message = wrapped.result.error_msg
             await self.wait_for(predicate=lambda: not self.core.active_goals and self.core.stopped(
@@ -329,7 +341,10 @@ class OperatorControl:
                 result.message = 'goal succeeded; measured stop confirmed'
                 handle.succeed()
             else:
-                result.message = result.message or 'navigation failed; measured stop confirmed'
+                code = wrapped.result.error_code
+                cause = {207: 'planner timed out', 208: 'no valid path',
+                         105: 'failed to make progress'}.get(code, 'navigation failed')
+                result.message = f'{cause} (Nav2 {code}): {result.message}; measured stop confirmed'
                 handle.abort()
         except Exception as error:
             result.success, result.message = False, str(error)
@@ -390,6 +405,11 @@ class OperatorControl:
                                                               State.PRIMARY_STATE_ACTIVE, wall)
                 elif base_state == State.PRIMARY_STATE_ACTIVE and self.node.base_transition is None:
                     good, message = self.core.finish_transition(ros_ns, wall)
+                    if not good:
+                        self.core.disable()
+                        self.node.publish_zero()
+                        self.node.request_base_transition(Transition.TRANSITION_DEACTIVATE,
+                                                          State.PRIMARY_STATE_INACTIVE, wall)
                     self.publish_speed()
                     self.finish_pending(good, message)
         self.report(ros_ns, wall)
@@ -409,12 +429,15 @@ class OperatorControl:
         message.localization_initialized = message.localization_mode == 'slam' or self.localization_initialized
         message.capabilities = ['observe', 'manual', 'navigate', 'speed_limit', 'maps']
         message.mode = self.core.mode
-        message.phase = ('TRANSITION' if self.pending else 'BLOCKED' if self.core.state == 'FAULT_LATCHED' or self.node.missing
+        arm_error = self.core.arm_error(wall) if not self.core.armed else ''
+        message.phase = ('TRANSITION' if self.pending else 'BLOCKED' if self.core.state == 'FAULT_LATCHED' or self.node.missing or arm_error
                          else 'READY' if self.core.mode == 'DISABLED' else 'ACTIVE')
         message.owner_id, message.epoch = self.core.owner_id, self.core.epoch_ns
         message.ready, message.manual_ready, message.auto_ready = not self.node.missing, not manual_missing, not auto_missing
+        if arm_error:
+            message.ready = message.auto_ready = message.manual_ready = False
         message.auto_ready = message.auto_ready and message.localization_initialized
-        message.missing, message.reason = list(self.node.missing), self.core.reason
+        message.missing, message.reason = list(self.node.missing), arm_error or self.core.reason
         message.stopped = self.core.stopped(ros_ns, wall)
         message.base_active = self.node.states['sim_base'][0] == State.PRIMARY_STATE_ACTIVE
         message.reverse_allowed = self.core.reverse_allowed

@@ -1,5 +1,6 @@
 """Publish a flat map bundle without exposing a loadable, incomplete YAML."""
 from contextlib import contextmanager
+import hashlib
 import fcntl
 import json
 import os
@@ -95,6 +96,10 @@ def staged_map(prefix, suffixes):
                 yield stage
                 meta_path = _file(stage, '.metadata.json')
                 metadata = json.loads(meta_path.read_text(encoding='utf-8'))
+                if '.keepout.json' in suffixes:
+                    contents = _file(stage, '.keepout.json').read_bytes()
+                    metadata['files']['keepout.json'] = {
+                        'sha256': hashlib.sha256(contents).hexdigest(), 'size_bytes': len(contents)}
                 for key, info in metadata['files'].items():
                     if '.' + key in suffixes:
                         info['path'] = str(_file(prefix, '.' + key))

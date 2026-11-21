@@ -17,8 +17,31 @@ Item {
             if(old.time!==next.time||old.message!==next.message||old.count!==next.count){changed=true;break}
         }
         if(!changed)return
-        logRows.clear()
-        for(var j=0;j<events.length;j++)logRows.append({time:events[j].time||"",level:events[j].level||"정보",message:events[j].message||"",count:events[j].count||1})
+        var topIndex = logList && !logList.atYBeginning ? logList.indexAt(1,logList.contentY+1) : -1
+        var top = topIndex >= 0 ? logRows.get(topIndex) : null
+        var anchor = top ? [top.time,top.message] : null
+        var item = anchor ? logList.itemAtIndex(topIndex) : null
+        var offset = item ? logList.contentY-item.y : 0
+        for(var j=0;j<events.length;j++) {
+            var entry=events[j]
+            var row={time:entry.time||"",level:entry.level||"정보",message:entry.message||"",count:entry.count||1}
+            if(j<logRows.count && logRows.get(j).time===row.time && logRows.get(j).message===row.message)
+                logRows.set(j,row)
+            else
+                logRows.insert(j,row)
+        }
+        if(logRows.count>events.length)logRows.remove(events.length,logRows.count-events.length)
+        if(logList) {
+            logList.forceLayout()
+            if(!anchor) logList.positionViewAtBeginning()
+            else for(var k=0;k<logRows.count;k++) {
+                if(logRows.get(k).message===anchor[1] && logRows.get(k).time===anchor[0]) {
+                    logList.positionViewAtIndex(k,ListView.Beginning)
+                    logList.contentY+=offset
+                    break
+                }
+            }
+        }
     }
     onEventsChanged: syncEvents()
     Component.onCompleted: syncEvents()
@@ -38,7 +61,7 @@ Item {
                 }
                 Rectangle {height:1;Layout.fillWidth:true;color:"#33475F"}
                 Text {visible:page.events.length===0;text:"아직 수신된 로그가 없습니다.";color:"#8FA8C4";Layout.alignment:Qt.AlignHCenter;Layout.topMargin:24}
-                ListView {objectName:"logList";Layout.fillWidth:true;Layout.fillHeight:true;clip:true;model:logRows;spacing:0
+                ListView {id:logList;objectName:"logList";Layout.fillWidth:true;Layout.fillHeight:true;clip:true;model:logRows;spacing:0
                     delegate:Item {
                         objectName:"logRow"
                         required property string time;required property string level;required property string message;required property int count

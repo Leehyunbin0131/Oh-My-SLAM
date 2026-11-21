@@ -6,6 +6,7 @@ lease, and a stop always takes precedence over a queued nonzero command.
 """
 
 from dataclasses import dataclass
+from omslam_base.core import CLOCK_SKEW_S
 import math
 
 
@@ -27,6 +28,7 @@ class Source:
     issued_wall: float
     goal_id: str
     motion_requested: bool
+    linear_requested: bool
 
 
 def angle_difference(a, b):
@@ -263,7 +265,7 @@ class NavigationGate:
 
     def _live(self, source, ros_ns, wall):
         return (source.goal_id == self.source_owner() and
-                0 <= (ros_ns - source.stamp) * 1e-9 < self.limits.command_timeout and
+                -CLOCK_SKEW_S <= (ros_ns - source.stamp) * 1e-9 < self.limits.command_timeout and
                 0 <= wall - source.issued_wall < self.limits.command_timeout)
 
     def waiting_for_final(self, ros_ns, wall):
@@ -282,13 +284,13 @@ class NavigationGate:
                 not self.healthy or not self.clock_fresh(wall) or
                 stamp < self.goal_stamp or stamp <= self.epoch_ns or
                 stamp < self.latest_source or
-                not 0 <= (ros_ns - stamp) * 1e-9 < self.limits.command_timeout):
+                not -CLOCK_SKEW_S <= (ros_ns - stamp) * 1e-9 < self.limits.command_timeout):
             self.rejected_sources += 1
             return False
         source = self.sources.get(stamp)
         if source is None:
-            source = Source(stamp, wall - (ros_ns - stamp) * 1e-9, self.source_owner(),
-                            bool(values[0] or values[5]))
+            source = Source(stamp, wall - max(0., (ros_ns - stamp) * 1e-9), self.source_owner(),
+                            bool(values[0] or values[5]), bool(values[0]))
             self.sources[stamp] = source
             self.latest_source = stamp
             self.last_source_at = wall

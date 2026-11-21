@@ -94,7 +94,7 @@ def test_subsecond_clock_rewind_clears_tf_and_stop_observations():
         return tf
 
     buffer.set_transform(transform(100., 5.), 'test')
-    guard = SimpleNamespace(core=core, tf_buffer=buffer, observations={'old': 1},
+    guard = SimpleNamespace(core=core, operator=None, tf_buffer=buffer, observations={'old': 1},
         future_observations={'old': 1}, depth_history=OrderedDict(old=1),
         pending_perception={'old': 1}, scan_pending=deque([1]),
         scan_tf=1, map_tf=1, memory_observation=1, health_observation=1,

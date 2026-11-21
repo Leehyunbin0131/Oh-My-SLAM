@@ -15,6 +15,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <numeric>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -339,9 +340,6 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
             "Start Coordinates of(" + std::to_string(start.pose.position.x) + ", " +
             std::to_string(start.pose.position.y) + ") was outside bounds");
   }
-  _a_star->setStart(
-    mx_start, my_start,
-    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(start.pose.orientation)));
 
   // Set goal point, in A* bin search coordinates
   if (!_costmap->worldToMapContinuous(
@@ -354,9 +352,7 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
             "Goal Coordinates of(" + std::to_string(goal.pose.position.x) + ", " +
             std::to_string(goal.pose.position.y) + ") was outside bounds");
   }
-  _a_star->setGoal(
-    mx_goal, my_goal,
-    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(goal.pose.orientation)));
+
 
   // Setup message
   nav_msgs::msg::Path plan;
@@ -398,7 +394,20 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
     if (!isPathCollisionFree(
         plan, *_costmap, _costmap_ros->getRobotFootprint(), _allow_unknown))
     {
-      throw nav2_core::NoValidPathCouldBeFound("Terminal path fails swept footprint validation");
+      const double yaw = tf2::getYaw(start.pose.orientation);
+      const double shortest = angles::shortest_angular_distance(yaw, tf2::getYaw(goal.pose.orientation));
+      if (std::abs(shortest) < 1e-6) {
+        throw nav2_core::NoValidPathCouldBeFound("Terminal connector is blocked");
+      }
+      const double alternate = shortest - std::copysign(2.0 * M_PI, shortest);
+      auto midpoint = plan.poses.front();
+      tf2::Quaternion rotation;
+      rotation.setRPY(0.0, 0.0, yaw + alternate / 2.0);
+      midpoint.pose.orientation = tf2::toMsg(rotation);
+      plan.poses.insert(plan.poses.begin() + 1, midpoint);
+      if (!isPathCollisionFree(plan, *_costmap, _costmap_ros->getRobotFootprint(), _allow_unknown)) {
+        throw nav2_core::NoValidPathCouldBeFound("Both terminal rotation directions are blocked");
+      }
     }
     if (cancel_checker()) {
       throw nav2_core::PlannerCancelled("Planner was cancelled");
@@ -429,6 +438,32 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
     return plan;
   }
 
+  // Start at the closest lattice heading reachable from the measured yaw.
+  // A wall can block just one of two neighboring headings.
+  const auto & headings = NodeLattice::motion_table.lattice_metadata.heading_angles;
+  const auto yaw = tf2::getYaw(start.pose.orientation);
+  std::vector<unsigned int> bins(headings.size());
+  std::iota(bins.begin(), bins.end(), 0);
+  std::stable_sort(bins.begin(), bins.end(), [&](unsigned int a, unsigned int b) {
+    return std::abs(angles::shortest_angular_distance(yaw, headings[a])) <
+           std::abs(angles::shortest_angular_distance(yaw, headings[b]));
+  });
+  auto connector = plan;
+  connector.poses.resize(2, plan.poses.front());
+  const auto bin = std::find_if(bins.begin(), bins.end(), [&](unsigned int b) {
+    connector.poses.back().pose.orientation = getWorldOrientation(headings[b]);
+    return isPathCollisionFree(connector, *_costmap, _costmap_ros->getRobotFootprint(), _allow_unknown);
+  });
+  if (bin == bins.end()) {
+    if (!isPathCollisionFree(plan, *_costmap, _costmap_ros->getRobotFootprint(), _allow_unknown)) {
+      throw nav2_core::StartOccupied("Measured starting footprint is occupied");
+    }
+    throw nav2_core::NoValidPathCouldBeFound("No collision-free connector to a lattice heading");
+  }
+  _a_star->setStart(mx_start, my_start, *bin);
+  _a_star->setGoal(
+    mx_goal, my_goal,
+    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(goal.pose.orientation)));
   // Compute plan
   NodeLattice::CoordinateVector path;
   int num_iterations = 0;

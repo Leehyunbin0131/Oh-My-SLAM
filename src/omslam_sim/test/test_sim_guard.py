@@ -9,14 +9,14 @@ def active_guard():
     return g
 
 
-def command(g, stamp=1_010_000_000, now=10.01, vx=.2,wz=.4):
+def command(g, stamp=1_010_000_000, now=10.01, vx=.1,wz=.4):
     assert g.requested(stamp,now)
     assert g.final(stamp,vx,wz,now)
 
 
 def test_original_deadline_and_sim_speedup():
     g=active_guard();command(g)
-    assert g.sample(10.02)==pytest.approx((.2,.4))
+    assert g.sample(10.02)==pytest.approx((.1,.4))
     g.clock(1_200_000_000,10.2)
     assert g.requested(1_010_000_000,10.2)
     assert g.final(1_010_000_000,.1,.1,10.2)
@@ -36,7 +36,7 @@ def test_pause_resume_discards_intent_and_rejects_frozen_stamp():
     assert g.sample(10.5)==(0.,0.)
     g.clock(1_030_000_000,10.51)
     command(g,1_030_000_000,10.51)
-    assert g.sample(10.52)==pytest.approx((.2,.4))
+    assert g.sample(10.52)==pytest.approx((.1,.4))
 
 
 def test_clock_reset_and_deactivation_clear_commands():
@@ -59,20 +59,20 @@ def test_coupled_wheel_limit_and_zero_watermark():
     g=active_guard();command(g,vx=3.,wz=2.)
     vx,wz=g.sample(10.02)
     rpms=g.geometry.rpm(vx,wz)
-    assert max(abs(r) for r in rpms)==pytest.approx(100.)
+    assert max(abs(r) for r in rpms)==pytest.approx(35.)
     assert wz/vx==pytest.approx(2/3)
     assert g.final(1_010_000_000,0.,0.,10.03)
     assert not g.final(1_010_000_000,.2,.4,10.04)
     assert g.sample(10.04)==(0.,0.)
 
 
-def test_simulation_default_accepts_100_rpm_straight_before_expiring():
+def test_simulation_default_accepts_35_rpm_straight_before_expiring():
     guard = active_guard()
-    maximum = 2 * math.pi * .068 * 100 / 60
+    maximum = 2 * math.pi * .068 * 35 / 60
     command(guard, vx=maximum, wz=0.)
-    assert guard.geometry.max_rpm == 100.
+    assert guard.geometry.max_rpm == 35.
     assert guard.sample(10.02) == pytest.approx((maximum, 0.))
-    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((100., 100.))
+    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((35., 35.))
     assert guard.sample(10.32) == (0., 0.)
 
 

@@ -59,15 +59,16 @@ void run_probe()
   auto progress = checks.createSharedInstance(parent->get_parameter("progress_checker.plugin").as_string());
   goal->initialize(parent, "goal_checker", cm);
   progress->initialize(parent, "progress_checker");
+  const double inside = parent->get_parameter("goal_checker.xy_goal_tolerance").as_double() * 0.9;
   const auto target = pose(0, 0, 0);
   geometry_msgs::msg::Twist stopped;
-  require(!goal->isGoalReached(pose(.09, 0, .5).pose, target.pose, stopped), "wrong yaw accepted");
+  require(!goal->isGoalReached(pose(inside, 0, .5).pose, target.pose, stopped), "wrong yaw accepted");
   require(!goal->isGoalReached(pose(.13, 0, 0).pose, target.pose, stopped), "outside XY accepted after drift");
-  require(goal->isGoalReached(pose(.09, 0, 0).pose, target.pose, stopped), "realigned goal rejected");
+  require(goal->isGoalReached(pose(inside, 0, 0).pose, target.pose, stopped), "realigned goal rejected");
   auto moving = stopped;
   moving.linear.x = .08;
-  require(!goal->isGoalReached(pose(.09, 0, 0).pose, target.pose, moving), "moving goal accepted");
-  std::cout << "arrival_at_9_13_9_cm=false,false,true; moving=false\n";
+  require(!goal->isGoalReached(pose(inside, 0, 0).pose, target.pose, moving), "moving goal accepted");
+  std::cout << "arrival_inside_outside_inside=false,false,true; moving=false\n";
 
   dwb_core::DWBLocalPlanner dwb;
   auto tf = std::make_shared<tf2_ros::Buffer>(parent->get_clock());
@@ -90,7 +91,8 @@ void run_probe()
     limits.operator_enabled = true;
     limits.max_linear_velocity = parent->get_parameter("FollowPath.max_speed_xy").as_double();
     limits.max_angular_velocity = parent->get_parameter("FollowPath.max_vel_theta").as_double();
-    limits.speed_percent = rpm;  // 100 RPM full scale in the sim profile.
+    const double full_rpm = limits.max_linear_velocity * 30.0 / (M_PI * 0.068);
+    limits.speed_percent = 100.0 * rpm / full_rpm;
     pub->publish(limits);
     exec.spin_some();
     dwb.setSpeedLimit(limits.speed_percent, true);
@@ -111,8 +113,8 @@ void run_probe()
         if (step % 20 == 0) {dwb.setPlan(plan);}
         require(progress->check(p), "moving robot failed the progress check");
         vel = dwb.computeVelocityCommands(p, vel, goal.get()).twist;
-        const double vmax = limits.max_linear_velocity * rpm / 100.0;
-        const double wmax = limits.max_angular_velocity * rpm / 100.0;
+        const double vmax = limits.max_linear_velocity * limits.speed_percent / 100.0;
+        const double wmax = limits.max_angular_velocity * limits.speed_percent / 100.0;
         require(std::abs(vel.linear.x) <= vmax + 1e-9 && std::abs(vel.angular.z) <= wmax + 1e-9,
           "DWB command exceeded its approved cap");
         x += vel.linear.x * .05 * std::cos(heading);

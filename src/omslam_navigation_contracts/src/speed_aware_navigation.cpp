@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 
+#include "angles/angles.h"
 #include "dwb_plugins/standard_traj_generator.hpp"
 #include "nav2_controller/plugins/pose_progress_checker.hpp"
 #include "nav2_util/node_utils.hpp"
@@ -34,7 +35,9 @@ public:
     // horizon does not grow abruptly while still moving faster than the cap.
     auto limits = kinematics_handler_->getKinematics();
     const auto speed = std::max(limits.getMaxSpeedXY(), std::hypot(velocity.x, velocity.y));
-    sim_time_ = speed > 0.0 ? std::max(nominal_horizon_, minimum_projection_ / speed) :
+    // Two 5 cm cells take 14.05 s at the supported 1 wheel RPM.
+    // Guard against an arbitrarily small positive external speed limit.
+    sim_time_ = speed > 0.0 ? std::clamp(minimum_projection_ / speed, nominal_horizon_, std::max(nominal_horizon_, 15.0)) :
       nominal_horizon_;
     StandardTrajectoryGenerator::startNewIteration(velocity);
   }
@@ -66,6 +69,9 @@ public:
           std::lock_guard<std::mutex> lock(limits_mutex_);
           linear_cap_ = linear;
           angular_cap_ = angular;
+        } else {
+          std::lock_guard<std::mutex> lock(limits_mutex_);
+          linear_cap_ = angular_cap_ = std::numeric_limits<double>::infinity();
         }
       });
   }
@@ -79,16 +85,27 @@ public:
     const double interval = 0.5 * time_allowance_.seconds();
     const double distance = std::min(radius_, linear_cap_ * interval);
     const double angle = std::min(required_movement_angle_, angular_cap_ * interval);
-    if (!baseline_pose_set_ || pose_distance(pose, baseline_pose_) > distance ||
-      poseAngleDistance(pose, baseline_pose_) > angle)
+    if (!baseline_pose_set_ || clock_->now() < baseline_time_ ||
+      pose_distance(pose, baseline_pose_) > distance)
     {
       resetBaselinePose(pose);
+      previous_yaw_ = pose.theta;
+      unwrapped_yaw_ = low_yaw_ = high_yaw_ = 0.;
+      return true;
+    }
+    unwrapped_yaw_ += angles::shortest_angular_distance(previous_yaw_, pose.theta);
+    previous_yaw_ = pose.theta;
+    if (unwrapped_yaw_ < low_yaw_ - angle || unwrapped_yaw_ > high_yaw_ + angle) {
+      low_yaw_ = std::min(low_yaw_, unwrapped_yaw_);
+      high_yaw_ = std::max(high_yaw_, unwrapped_yaw_);
+      baseline_time_ = clock_->now();
       return true;
     }
     return clock_->now() - baseline_time_ <= time_allowance_;
   }
 
 private:
+  double previous_yaw_{0.}, unwrapped_yaw_{0.}, low_yaw_{0.}, high_yaw_{0.};
   std::mutex limits_mutex_;
   double linear_cap_{std::numeric_limits<double>::infinity()};
   double angular_cap_{std::numeric_limits<double>::infinity()};

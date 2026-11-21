@@ -39,6 +39,22 @@ def jsonable(value):
     raise TypeError(str(type(value)))
 
 
+def late_cancel_commands(events, request_time, terminal_wall_time):
+    return [row for row in events if any(row['velocity']) and (
+        (row['topic'] == '/cmd_vel' and row['stamp'] is not None and row['stamp'] > request_time)
+        or (row['topic'] == '/sim/cmd_vel' and row['wall_time'] > terminal_wall_time))]
+
+
+def last_valid_sensor_stamp(records, topic, initial_stamp, zero):
+    def valid(row):
+        if topic == '/scan':
+            return row.get('valid_count', 0) > 0
+        return row.get('valid_fraction', 0.) > .05
+    return max([initial_stamp] + [row['stamp'] for row in records
+        if row['topic'] == topic and row['wall_time'] <= zero['wall_time']
+        and 0 < row['stamp'] <= zero['sim_time'] and valid(row)])
+
+
 def command_limit_evidence(events, geometry, limits):
     """Check each velocity stage and the unsaturated kinematics at Gazebo's input."""
     stages = {}
@@ -73,8 +89,8 @@ def bounded_planner_evidence(entry,bt_events,states,ros_errors,marked=None,obstr
     retries=[e for e in events if e['name']=='ComputePathToPose' and e['current']=='RUNNING'
              and waited and e['stamp']>=waited[0]['stamp']]
     failures=[e for e in ros_errors if e['name']=='planner_server' and 'failed to plan' in e['message']
-              and begin<=e['sim_time']<=end and retries and e['sim_time']>=retries[0]['sim_time']
-              and ('stamp' not in e or e['stamp']>=retries[0]['stamp'])]
+              and retries and e.get('stage')==entry['start']['stage']
+              and retries[0]['stamp'] <= e['stamp'] <= entry['end']['wall_epoch']]
     active_states=[e for e in states if begin<=e['sim_time']<=end]
     healthy=bool(active_states) and all(e['state']!='FAULT_LATCHED' for e in active_states)
     ordered=bool(cancels) and len(waits)==1 and len(waited)==1 and bool(retries)
@@ -787,8 +803,9 @@ class NavigationRun:
         response=future.result();self.event('cancel_response',goals_canceling=len(response.goals_canceling))
         self.e.detail('cancel_accepted',bool(response.goals_canceling))
         entry=self.finish_goal(expected=5,timeout=10,stop_trigger=start)
-        after=[x for x in self.command_events if x['topic']=='/cmd_vel' and x['sim_time']>entry['end']['sim_time']]
-        self.e.detail('cancel_no_late_nonzero',all(not any(x['velocity']) for x in after),commands=len(after))
+        terminal=entry['end']['wall_time']
+        late=late_cancel_commands(self.command_events,start,terminal)
+        self.e.detail('cancel_no_late_nonzero',not late,late=late)
         return entry
 
     def in_region(self,region,min_speed=.1):
@@ -861,7 +878,10 @@ class NavigationRun:
         self.until(lambda:self.guard_state.get('state')=='FAULT_LATCHED',5,'sensor fault latch')
         latch=self.sim_time
         self.until(lambda:any(x['topic']=='/cmd_vel' and x['sim_time']>=start and not any(x['velocity']) for x in self.command_events),2,'fault final zero')
-        zero=min(x['sim_time'] for x in self.command_events if x['topic']=='/cmd_vel' and x['sim_time']>=start and not any(x['velocity']))
+        zero_event=next(x for x in self.command_events if x['topic']=='/cmd_vel' and x['sim_time']>=start and not any(x['velocity']))
+        zero=zero_event['sim_time']
+        sensor_topic='/scan' if name=='scan' else '/camera/depth/image_rect_raw'
+        last_stamp=last_valid_sensor_stamp(self.sensor_observations,sensor_topic,last_stamp,zero_event)
         self.wait_stop(label,zero)
         self.until(lambda:self.current_future.done(),5,'fault goal terminal')
         response=self.current_future.result();self.current_entry.update(status=response.status,end=self.now(),error_code=response.result.error_code)

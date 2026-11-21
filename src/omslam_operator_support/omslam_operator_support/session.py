@@ -89,8 +89,14 @@ class Processes:
         with self.lock:
             self.closing = True
             keys = list(self.items)
+        errors = []
         for key in reversed(keys):
-            self.stop(key)
+            try:
+                self.stop(key)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                errors.append(f'{key}: {error}')
+        if errors:
+            raise RuntimeError('Process shutdown failed: ' + ', '.join(errors))
 
     def exited(self):
         """Poll only currently owned children, atomically with stop/start.
@@ -523,7 +529,6 @@ def main(argv=None):
         parser.error('--real과 --start-sim은 함께 사용할 수 없습니다.')
     root = Path(args.workspace).resolve()
     logs = root / 'reports' / 'operator' / datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-    processes = Processes(logs)
     lock = open(f'/tmp/omslam-console-{os.getuid()}-{os.environ.get("ROS_DOMAIN_ID", "0")}.lock', 'a')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -532,10 +537,11 @@ def main(argv=None):
         if args.start_sim or args.no_gui:
             sys.exit('같은 ROS domain의 콘솔 지원 세션이 이미 실행 중입니다.')
         if args.debug_path:
-            return recorded_observer(args, processes, gui_args)
+            return recorded_observer(args, Processes(logs), gui_args)
         # Additional windows share the existing support service and start as observers.
         os.execv(sys.executable, [sys.executable, '-m', 'omslam_operator.app',
                  *(['--real-time', '--read-only'] if args.real else ['--use-sim-time']), *gui_args])
+    processes = Processes(logs)
     rclpy.init(args=[])
     node = MapSupport(args, processes)
     executor = MultiThreadedExecutor(num_threads=4)
@@ -570,10 +576,10 @@ def main(argv=None):
                 if key == 'gui':
                     code = returncode
                     running.set()
-                elif key == 'path_debug':
+                elif key in ('path_debug', 'system_monitor'):
                     # Recording failure must not tear down a navigation session.
                     # The GUI independently detects missing status heartbeats.
-                    print(f'경로 기록 프로세스 종료: {returncode}; {logs}', file=sys.stderr)
+                    print(f'{key} 프로세스 종료: {returncode}; {logs}', file=sys.stderr)
                     processes.stop(key)
                 else:
                     raise RuntimeError(f'{key} 종료: {returncode}; {logs}')

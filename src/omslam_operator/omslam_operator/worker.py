@@ -65,6 +65,7 @@ class Shared:
         self.stop=threading.Event()
         self.node=None
         self.goal_handle=None
+        self.cancel_request=None
         self.goal_active=False
         self.goal_request=None
         self.goal_phase=None
@@ -74,6 +75,15 @@ class Shared:
         self.path_terminal_id=''
         self.guard_state_stamp=0
         self.retired_sessions=set()
+
+    def drop_queued_requests(self):
+        # Publish terminal responses for service calls removed before dispatch.
+        # A request already claimed by pump() keeps its real response.
+        for kind, payload in self.controls:
+            if kind in ('maps', 'keepouts'):
+                key = 'map_response' if kind == 'maps' else 'keepout_response'
+                self.data[key] = {'success': False, 'message': '전송 전 요청 취소',
+                                  '_request_id': payload.get('_request_id')}
 
     def cancel_unsent_goal(self):
         """Called under the queue lock. A claimed request still has a ROS result."""
@@ -144,6 +154,7 @@ class ConsoleNode(Node):
         self.last_graph=0.
         self.last_history=0.
         self.frame_visible='camera'
+        self.goal_server_missing_since=None
         self.tf_errors={}
         self.last_revision={}
         self.last_event_signature=''
@@ -185,8 +196,8 @@ class ConsoleNode(Node):
         self.sub(MemoryStatus,'/perception/memory_status',lambda m:self.assign('memory',plain(m)),transient)
         self.sub(PointCloud2,'/perception/memory_preview',lambda m:self.cloud('memory_points',m),transient)
         self.sub(PerceptionHealth,'/perception/health',lambda m:self.assign('health',plain(m)),transient)
-        for key,topic in [('obstacles','/perception/obstacles'),('points','/camera/points')]:
-            self.sub(PointCloud2,topic,lambda m,k=key:self.cloud(k,m),sensor)
+        self.cloud_subscriptions = []
+        self.cloud_qos = sensor
         for topic in ('/cmd_vel/requested','/cmd_vel/smoothed','/cmd_vel/monitored','/cmd_vel'):
             self.sub(TwistStamped,topic,lambda m,t=topic:self.velocity(t,m.twist),10)
         self.manual_pub=self.create_publisher(ManualCommand,self.topic('/operator/manual'),1)
@@ -219,6 +230,19 @@ class ConsoleNode(Node):
             publisher.publish(String(data=json.dumps(value,ensure_ascii=False,allow_nan=False)))
         except Exception as exc:
             self.s.event('경로 기록 이벤트 전송 오류: '+str(exc))
+
+    def select_view(self, view):
+        self.frame_visible = view
+        if view == 'perception' and not self.cloud_subscriptions:
+            for key, topic in [('obstacles','/perception/obstacles'), ('points','/camera/points')]:
+                self.cloud_subscriptions.append(self.sub(
+                    PointCloud2, topic, lambda m,k=key:self.cloud(k,m), self.cloud_qos))
+        elif view != 'perception' and self.cloud_subscriptions:
+            for sub in self.cloud_subscriptions:
+                self.destroy_subscription(sub)
+            self.cloud_subscriptions.clear()
+            for topic in ('/camera/points', '/perception/obstacles'):
+                self.pending_samples.pop(topic, None)
 
     def sub(self,typ,topic,callback,qos):
         def receive(message):
@@ -265,7 +289,7 @@ class ConsoleNode(Node):
             sample=self.pending_samples.get(name)
             if sample is None:continue
             timeout=.3 if name=='/operator/state' else .8
-            if time.monotonic()-sample[2]>=timeout:
+            if name not in ('/map','/operator/keepouts') and time.monotonic()-sample[2]>=timeout:
                 self.pending_samples.pop(name,None)
             elif sample[3]<=ros:
                 self.pending_samples.pop(name,None)
@@ -274,13 +298,16 @@ class ConsoleNode(Node):
 
     def deliver_sample(self,topic,sample):
         message,callback,received,stamp,frame,type_name=sample
+        self.sample_received=received
+        try:
+            callback(message)
+        except Exception as exc:
+            self.s.event(topic+' 표시 오류: '+str(exc))
+        finally:
+            self.sample_received=None
         with self.s.lock:
             prev=self.s.data['topics'].get(topic,{})
             interval=received-prev.get('received',received)
-            self.sample_received=received
-            try:callback(message)
-            except Exception as exc:self.s.event(topic+' 표시 오류: '+str(exc))
-            finally:self.sample_received=None
             self.s.data['topics'][topic]={'received':received,'stamp':stamp,'frame':frame,
                 'hz':.8*prev.get('hz',0)+.2/interval if interval>0 else 0.,
                 'type':type_name,'count':prev.get('count',0)+1}
@@ -317,6 +344,12 @@ class ConsoleNode(Node):
             replaced=bool(old_session and session != old_session)
             if replaced:
                 self.s.retired_sessions.add(old_session)
+                for key in list(self.s.map_layers):
+                    self.s.map_layers.pop(key)
+                    self.s.touch_map(key)
+                    self.s.data['layers'].pop(key, None)
+                self.s.data.pop('keepouts', None)
+                self.pending_samples.clear()
                 self.s.path_terminal_id=''
                 self.s.path_candidate=None
                 self.s.goal_handle=None
@@ -417,7 +450,10 @@ class ConsoleNode(Node):
             ox,oy=origin[:2]
             origin=[x+math.cos(t)*ox-math.sin(t)*oy,y+math.sin(t)*ox+math.cos(t)*oy,t+yaw]
         except Exception:
-            with self.s.lock:self.s.data['layers'][key]={'error':'TF 대기','available':False}
+            with self.s.lock:
+                self.s.map_layers.pop(key, None)
+                self.s.touch_map(key)
+                self.s.data['layers'][key]={'error':'TF 대기','available':False}
             return
         with self.s.lock:
             revision=self.s.touch_map(key)
@@ -619,9 +655,10 @@ class ConsoleNode(Node):
             self.request(self.keepouts_client,req,'keepout_response',{'_request_id':data['_request_id']})
         elif kind=='cancel':
             self.debug_event('cancel_requested')
-            if self.s.goal_handle:self.s.goal_handle.cancel_goal_async()
+            if self.s.goal_handle and self.s.goal_request == data.get('request_id'):
+                self.s.goal_handle.cancel_goal_async()
         elif kind=='navigate':self.start_goal(data)
-        elif kind=='view':self.frame_visible=data
+        elif kind=='view':self.select_view(data)
 
     def start_goal(self,data):
         request_id=data.get('request_id') or uuid.uuid4().hex
@@ -661,17 +698,23 @@ class ConsoleNode(Node):
             finish({'success':False,'message':message,'status':6})
             return
         def accepted(f):
-            if self.s.goal_request != request_id:return
             try:
-                handle=f.result();self.s.goal_handle=handle
+                handle=f.result()
+                if self.s.goal_request != request_id or self.s.goal_phase == 'terminal':
+                    if handle.accepted:
+                        handle.cancel_goal_async()
+                    return
+                self.s.goal_handle=handle
                 self.debug_event('goal_response',request_id,accepted=handle.accepted,
                                  action_goal_id=bytes(handle.goal_id.uuid).hex())
                 if not handle.accepted:
                     self.s.goal_active=False;finish({'success':False,'message':'목표 거부','status':6});return
                 self.s.goal_phase='accepted'
+                if self.s.cancel_request == request_id:
+                    handle.cancel_goal_async()
                 self.s.event('목표 수락됨')
                 def result(r):
-                    if self.s.goal_request != request_id:return
+                    if self.s.goal_request != request_id or self.s.goal_phase == 'terminal':return
                     try:
                         data=plain(r.result().result)
                         finish(data);self.s.event(data.get('message','목표 종료'))
@@ -688,7 +731,25 @@ class ConsoleNode(Node):
                 finish({'success':False,'message':message,'status':6})
         future.add_done_callback(accepted)
 
+    def check_goal_server(self, now):
+        if not self.s.goal_active or self.navigate.server_is_ready():
+            self.goal_server_missing_since = None
+            return
+        if self.goal_server_missing_since is None:
+            self.goal_server_missing_since = now
+        elif now - self.goal_server_missing_since >= 2.:
+            with self.s.lock:
+                self.s.cancel_request = self.s.goal_request
+                self.s.goal_active = False
+                self.s.goal_handle = None
+                self.assign('goal_result', {'request_id':self.s.goal_request,'status':6,
+                            'success':False,'message':'목표 서버 연결이 끊어져 경로 이동을 중단했습니다'})
+            if self.stop_client.service_is_ready():
+                self.request(self.stop_client,Trigger.Request())
+            self.goal_server_missing_since = None
+
     def pump(self):
+        self.check_goal_server(time.monotonic())
         self.flush_pending()
         self.flush_scans()
         self.flush_clouds()

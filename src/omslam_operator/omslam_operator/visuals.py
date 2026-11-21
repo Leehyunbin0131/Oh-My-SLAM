@@ -14,7 +14,7 @@ class CameraProvider(QQuickImageProvider):
 
     def requestImage(self, identifier, size, requestedSize):
         with self.shared.lock:
-            image = self.shared.images.get(identifier.split('/')[0], QImage()).copy()
+            image = QImage(self.shared.images.get(identifier.split('/')[0], QImage()))
         if image.isNull():
             image = QImage(1, 1, QImage.Format_RGB888)
             image.fill(QColor('#101b28'))
@@ -126,7 +126,9 @@ class RobotMap(QQuickPaintedItem):
             if self._source:
                 with self._source.s.lock:
                     available = 'map' in self._source.s.map_layers
-                if not available and not self.follow:
+                if available and not self.fitted and self.width() > 1:
+                    self.fit()
+                elif not available and not self.follow:
                     self.fitted = False
             self.update()
 
@@ -265,11 +267,8 @@ class RobotMap(QQuickPaintedItem):
                     ('pose', 'path', 'scan', 'memory_points', 'obstacles')}
             data['trace'] = list(raw.get('trace', []))
             grids = dict(self._source.s.map_layers)
-        if not self.fitted and 'map' in grids and self.width() > 1:
-            self.fit()
         ui = getattr(self._source, 'ui', {})
         pose_valid = not ui or ui.get('poseX') is not None
-        self._sync_follow()
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
         for key in ('map', 'global', 'local'):
             if key not in grids or (key != 'map' and not self.layers[key]):

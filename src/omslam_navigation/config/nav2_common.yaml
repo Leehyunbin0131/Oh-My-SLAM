@@ -47,7 +47,11 @@ controller_server:
     FollowPath:
       plugin: dwb_core::DWBLocalPlanner
       trajectory_generator_name: omslam_navigation::SpeedAwareTrajectoryGenerator
-      critics: [ObstacleFootprint, RotateToGoal, Oscillation, GoalAlign, PathAlign, PathDist, GoalDist]
+      ObstacleFootprint.class: omslam_navigation::FilledFootprintCritic
+      Oscillation.class: omslam_navigation::PlannedOscillationCritic
+      PlannedTurn.class: omslam_navigation::PlannedTurnCritic
+      PlannedTurn.scale: 32.0
+      critics: [ObstacleFootprint, PlannedTurn, RotateToGoal, Oscillation, GoalAlign, PathAlign, PathDist, GoalDist]
       short_circuit_trajectory_evaluation: true
       stateful: true
       publish_evaluation: true

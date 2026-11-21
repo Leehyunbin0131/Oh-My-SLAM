@@ -89,3 +89,13 @@ def test_disabled_transition_readiness_is_observable_without_crashing():
     finally:
         node.destroy_node()
         rclpy.try_shutdown()
+
+
+def test_five_centimetre_zone_survives_point32_roundtrip_at_airport_coordinates():
+    import struct
+    def wire(x):
+        return struct.unpack('f', struct.pack('f', x))[0]
+    points = [[wire(x), wire(y)] for x,y in [(-120.,0.),(-119.95,0.),(-119.95,.05),(-120.,.05)]]
+    assert validate_polygons([points])
+    with pytest.raises(ValueError):
+        validate_polygons([[[0.,0.],[.049,0.],[.049,.05],[0.,.05]]])

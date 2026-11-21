@@ -345,7 +345,7 @@ class Airport:
                     cells.add((ix,iy))
                     self.floor_area+=(xs[ix+1]-xs[ix])*(ys[iy+1]-ys[iy])
                     self.box('stone',mx,my,-.055,xs[ix+1]-xs[ix],ys[iy+1]-ys[iy],.11)
-        self.collision_box('continuous_floor',-42,0,-.13,160,124,.24)
+        self.collision_box('continuous_floor',-42,0,-.12,160,124,.24)
         # merge collinear boundary edges to avoid duplicated window frames.
         edges=defaultdict(list)
         for ix,iy in cells:

@@ -102,3 +102,12 @@ def test_disk_error_stays_observable_without_blocking_submit(tmp_path, monkeypat
     assert status['dropped'] == 1 and status['written'] == 0
     assert not writer.submit({'kind': 'late'})
     assert writer.status()['dropped'] == 2
+
+
+def test_nonfinite_record_does_not_end_session(tmp_path):
+    writer = RecordWriter(tmp_path / 'session')
+    assert not writer.submit({'bad': float('nan')})
+    assert writer.submit({'kind': 'result', 'success': True})
+    status = writer.close()
+    assert not status['error'] and status['dropped'] == 1 and status['written'] == 1
+    assert status['last_invalid_record']

@@ -28,6 +28,10 @@ def setup(context):
             Node(package='tf2_ros', executable='static_transform_publisher', name='base_mount_tf',
                  arguments=['--z', get('base_link_z'), '--frame-id', 'base_footprint', '--child-frame-id', 'base_link'],
                  parameters=[{'use_sim_time': use_sim_time}]),
+        ]
+    publish_imu = boolean('publish_imu_tf') if get('publish_imu_tf') else boolean('publish_static_tfs')
+    if publish_imu:
+        actions += [
             Node(package='tf2_ros', executable='static_transform_publisher', name='imu_mount_tf',
                  arguments=['--x', get('imu_x'), '--y', get('imu_y'), '--z', get('imu_z'),
                             '--roll', get('imu_roll'), '--pitch', get('imu_pitch'), '--yaw', get('imu_yaw'),
@@ -48,7 +52,7 @@ def generate_launch_description():
     share = Path(get_package_share_directory('omslam_localization'))
     defaults = {'use_sim_time': 'false', 'imu_source': 'external',
                 'imu_config': str(share/'config/imu.yaml'), 'ekf_config': str(share/'config/ekf.yaml'),
-                'publish_static_tfs': 'false', 'base_link_z': '0.101',
+                'publish_static_tfs': 'false', 'publish_imu_tf': '', 'base_link_z': '0.101',
                 'imu_x': '0.0', 'imu_y': '0.0', 'imu_z': '0.0',
                 'imu_roll': '0.0', 'imu_pitch': '0.0', 'imu_yaw': '0.0',
                 'imu_port': '', 'imu_baud': '921600', 'mounting_verified': 'false', 'mock_yaw_rate': '0.0'}

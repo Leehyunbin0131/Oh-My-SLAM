@@ -187,7 +187,7 @@ TEST_F(TerminalPlanner, ApproachAndSameCellPreserveRequestedEndpoint)
   EXPECT_EQ(same_cell.poses.back().pose, same_cell_goal.pose);
 }
 
-TEST_F(TerminalPlanner, RejectsSweptRotationEvenWithFreeEndpoints)
+TEST_F(TerminalPlanner, UsesClearRotationArcAndRejectsTwoBlockedArcs)
 {
   configure();
   const auto start = pose(0, 0);
@@ -199,6 +199,12 @@ TEST_F(TerminalPlanner, RejectsSweptRotationEvenWithFreeEndpoints)
     ASSERT_TRUE(nav2_smac_planner::isPathCollisionFree(
       single, *costmap_ros->getCostmap(), costmap_ros->getRobotFootprint(), false));
   }
+  auto alternate = plan(start, goal);
+  ASSERT_TRUE(nav2_smac_planner::isPathCollisionFree(
+    alternate, *costmap_ros->getCostmap(), costmap_ros->getRobotFootprint(), false));
+  EXPECT_EQ(alternate.poses.front().pose, start.pose);
+  EXPECT_EQ(alternate.poses.back().pose, goal.pose);
+  obstacle(0.33, 0.33, nav2_costmap_2d::LETHAL_OBSTACLE);
   EXPECT_THROW(plan(start, goal), nav2_core::NoValidPathCouldBeFound);
 }
 
@@ -231,7 +237,11 @@ TEST_F(TerminalPlanner, GeneralPathChecksAndRetainsMeasuredStart)
   for (bool smooth : {false, true}) {
     configure(0.1, "diff", smooth);
     obstacle(-0.325, -0.375, nav2_costmap_2d::LETHAL_OBSTACLE);
-    EXPECT_THROW(plan(start, goal), nav2_core::NoValidPathCouldBeFound);
+    nav_msgs::msg::Path measured;
+    measured.poses.push_back(start);
+    ASSERT_FALSE(nav2_smac_planner::isPathCollisionFree(
+      measured, *costmap_ros->getCostmap(), costmap_ros->getRobotFootprint(), false));
+    EXPECT_THROW(plan(start, goal), nav2_core::StartOccupied);
     obstacle(-0.325, -0.375, nav2_costmap_2d::FREE_SPACE);
     const auto route = plan(start, goal);
     ASSERT_FALSE(route.poses.empty());

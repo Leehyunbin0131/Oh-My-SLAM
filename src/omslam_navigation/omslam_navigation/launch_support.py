@@ -95,6 +95,14 @@ def keepout_file_for_map(map_path, allow_pending=False):
     if not allow_pending and (pending.exists() or pending.is_symlink()):
         raise ValueError('Map keepout save is incomplete; save a complete bundle before loading it')
     sidecar = path.with_suffix('.keepout.json')
+    metadata_path = path.with_suffix('.metadata.json')
+    if metadata_path.is_file():
+        files = json.loads(metadata_path.read_text(encoding='utf-8')).get('files', {})
+        if 'keepout.json' in files:
+            if not sidecar.is_file():
+                raise ValueError(f'Required keepout file is missing: {sidecar}')
+            if hashlib.sha256(sidecar.read_bytes()).hexdigest() != files['keepout.json'].get('sha256'):
+                raise ValueError(f'Keepout file hash does not match map metadata: {sidecar}')
     if not sidecar.exists() and not sidecar.is_symlink():
         return None
     load_keepout_file(sidecar)
@@ -330,7 +338,7 @@ def validate_configuration(configuration, share):
     return c
 
 
-def load_configuration(share, override=None):
+def load_configuration(share, override=None, *, operator_enabled=None):
     share = Path(share)
     result = merge_parameters(_read_yaml(share / 'config/nav2_common.yaml'),
                               _read_yaml(share / 'config/sim_profile.yaml'))
@@ -338,6 +346,8 @@ def load_configuration(share, override=None):
         overrides = _read_yaml(override)
         _validate_override(result, overrides)
         result = merge_parameters(result, overrides)
+    if operator_enabled is not None:
+        result['navigation_guard']['ros__parameters']['operator_enabled'] = operator_enabled
     return validate_configuration(result, share)
 
 
@@ -362,9 +372,8 @@ def _start(context, mode):
         raise ValueError('Use /navigation/enable after readiness; autostart_base must be false')
     share = Path(get_package_share_directory('omslam_navigation'))
     mapping_share = Path(get_package_share_directory('omslam_mapping'))
-    config = load_configuration(share, get('nav2_params_file') or None)
+    config = load_configuration(share, get('nav2_params_file') or None, operator_enabled=boolean('operator_enabled'))
     config['navigation_guard']['ros__parameters']['localization_mode'] = mode
-    config['navigation_guard']['ros__parameters']['operator_enabled'] = boolean('operator_enabled')
     validate_configuration(config, share)
     backend_mode = 'mapping' if mode == 'slam' else 'localization'
     backend_params = Path(get('backend_params_file')) if get('backend_params_file') else (

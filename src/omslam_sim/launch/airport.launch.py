@@ -59,7 +59,7 @@ def _launch(context):
         SetEnvironmentVariable('QT_QPA_PLATFORM', 'xcb'),
         SetEnvironmentVariable('QT_AUTO_SCREEN_SCALE_FACTOR', '0'),
         ExecuteProcess(
-            cmd=arguments, output='screen', sigterm_timeout='12', sigkill_timeout='3',
+            cmd=arguments, output='screen', sigterm_timeout='16', sigkill_timeout='3',
             on_exit=_gazebo_exited,
         ),
     ]

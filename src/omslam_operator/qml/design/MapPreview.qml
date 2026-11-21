@@ -80,16 +80,16 @@ Item {
             if (!pressed || !(pressedButtons & Qt.LeftButton)) return
             endX=mouse.x; endY=mouse.y
             if (map.adding || map.drawingKeepout) return
-            if (dragIndex>=0 && dragIndex<map.goals.length && map.editable) {
-                var goal=map.goals[dragIndex], p=nativeMap.screenPoint(goal.x,goal.y)
-                if (rotating) map.goalMoved(dragIndex,goal.x,goal.y,Math.atan2(p.y-mouse.y,mouse.x-p.x))
-                else { var world=nativeMap.worldPoint(mouse.x,mouse.y); map.goalMoved(dragIndex,world.x,world.y,goal.yaw) }
-            } else nativeMap.pan(mouse.x-lastX,mouse.y-lastY)
+            if (dragIndex<0) nativeMap.pan(mouse.x-lastX,mouse.y-lastY)
             lastX=mouse.x; lastY=mouse.y
         }
         onReleased: function(mouse) {
             if (mouse.button!==Qt.LeftButton) return
-            if (drawing && map.drawingKeepout && map.editable) {
+            if (dragIndex>=0 && dragIndex<map.goals.length && map.editable) {
+                var goal=map.goals[dragIndex], p=nativeMap.screenPoint(goal.x,goal.y)
+                if (rotating) map.goalMoved(dragIndex,goal.x,goal.y,Math.atan2(p.y-mouse.y,mouse.x-p.x))
+                else { var world=nativeMap.worldPoint(mouse.x,mouse.y); map.goalMoved(dragIndex,world.x,world.y,goal.yaw) }
+            } else if (drawing && map.drawingKeepout && map.editable) {
                 if (Math.hypot(mouse.x-startX,mouse.y-startY)>=6) {
                     var a=nativeMap.worldPoint(startX,startY), b=nativeMap.worldPoint(mouse.x,mouse.y)
                     map.keepoutPlaced(a.x,a.y,b.x,b.y)
@@ -103,7 +103,22 @@ Item {
         }
         onCanceled: map.cancelGesture()
         onWheel: function(wheel) {
-            if (!drawing && !map.adding) nativeMap.zoom(wheel.angleDelta.y>0?1.12:1/1.12)
+            if (wheel.angleDelta.y!==0 && !drawing && !map.adding) nativeMap.zoom(wheel.angleDelta.y>0?1.12:1/1.12)
+        }
+        Item {
+            visible: mapInput.pressed && !mapInput.drawing && map.editable &&
+                     (map.adding || mapInput.dragIndex >= 0) && Math.hypot(mapInput.endX-mapInput.startX,mapInput.endY-mapInput.startY)>3
+            property var goal: mapInput.dragIndex>=0 ? map.goals[mapInput.dragIndex] : null
+            property point anchor: goal && mapInput.rotating ? nativeMap.screenPoint(goal.x,goal.y) :
+                                   goal ? Qt.point(mapInput.endX,mapInput.endY) : Qt.point(mapInput.startX,mapInput.startY)
+            x: anchor.x
+            y: anchor.y
+            rotation: goal && !mapInput.rotating ? -goal.yaw*180/Math.PI :
+                      Math.atan2(mapInput.endY-y,mapInput.endX-x)*180/Math.PI
+            Rectangle { x:-7;y:-7;width:14;height:14;radius:7;color:"#8bc4ff" }
+            Rectangle { x:0;y:-1.5;width:32;height:3;color:"#8bc4ff" }
+            Rectangle { x:24;y:-4;width:9;height:3;rotation:35;color:"#8bc4ff" }
+            Rectangle { x:24;y:1;width:9;height:3;rotation:-35;color:"#8bc4ff" }
         }
         Rectangle {
             visible: mapInput.drawing && map.drawingKeepout

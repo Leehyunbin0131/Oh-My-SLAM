@@ -15,7 +15,7 @@ def test_goal_checker_thresholds_are_connected_to_planner_and_dwb(tmp_path):
     override.write_text(yaml.safe_dump({'controller_server': {'ros__parameters': {
         'goal_checker': {'xy_goal_tolerance': .06, 'trans_stopped_velocity': .005},
     }}}))
-    for path, xy, stopped in [(None, .1, .01), (override, .06, .005)]:
+    for path, xy, stopped in [(None, .08, .01), (override, .06, .005)]:
         config = load_configuration(share, path)
         controller = config['controller_server']['ros__parameters']
         planner = config['planner_server']['ros__parameters']['GridBased']

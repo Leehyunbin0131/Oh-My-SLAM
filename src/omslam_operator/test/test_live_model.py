@@ -243,10 +243,10 @@ def test_live_invalid_map_path_and_service_rejection_are_visible(model):
 
 
 def test_live_waypoint_edit_reorder_remove_and_unknown_rejection(model):
-    model.addWaypoint(.3, .4, .5)
+    model.addWaypoint(.65, .65, .5)
     model.addWaypoint(.5, .6, .7)
     first = model.queue[0]['uid']
-    model.editWaypoint(0, .4, .3, 1.2)
+    model.editWaypoint(0, .6, .7, 1.2)
     assert model.queue[0]['uid'] == first and model.queue[0]['yaw'] == 1.2
     model.moveWaypoint(0, 1)
     assert model.queue[1]['uid'] == first

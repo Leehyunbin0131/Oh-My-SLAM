@@ -498,7 +498,7 @@ void NodeLattice::getNeighbors(
   uint64_t index = 0;
   bool backwards = false;
   NodePtr neighbor = nullptr;
-  Coordinates initial_node_coords, motion_projection;
+  Coordinates motion_projection;
   unsigned int direction_change_index = 0;
   MotionPrimitivePtrs motion_primitives = motion_table.getMotionPrimitives(
     this,
@@ -529,33 +529,41 @@ void NodeLattice::getNeighbors(
       motion_projection.theta = opposite_heading_theta;
     }
 
+    const auto grid = collision_checker->getCostmap();
+    if (motion_projection.x < 0 || motion_projection.y < 0 ||
+      motion_projection.x >= grid->getSizeInCellsX() || motion_projection.y >= grid->getSizeInCellsY())
+    {
+      continue;
+    }
     index = NodeLattice::getIndex(
       static_cast<unsigned int>(motion_projection.x),
       static_cast<unsigned int>(motion_projection.y),
       static_cast<unsigned int>(motion_projection.theta));
 
     if (NeighborGetter(index, neighbor) && !neighbor->wasVisited()) {
-      // Cache the initial pose in case it was visited but valid
-      // don't want to disrupt continuous coordinate expansion
-      initial_node_coords = neighbor->pose;
-
-      neighbor->setPose(
-        Coordinates(
-          motion_projection.x,
-          motion_projection.y,
-          motion_projection.theta));
-
-      // Using a special isNodeValid API here, giving the motion primitive to use to
-      // validity check the transition of the current node to the new node over
-      if (neighbor->isNodeValid(
-          traverse_unknown, collision_checker, motion_primitives[i], backwards))
-      {
-        neighbor->setMotionPrimitive(motion_primitives[i]);
-        // Marking if this search was obtained in the reverse direction
-        neighbor->backwards(backwards);
+      // An index may already have a cheaper parent, or appear twice in this
+      // expansion. Test the continuous primitive on a temporary node first.
+      NodeLattice candidate(*neighbor);
+      candidate.setPose(motion_projection);
+      candidate.setMotionPrimitive(motion_primitives[i]);
+      candidate.backwards(backwards);
+      if (!candidate.isNodeValid(traverse_unknown, collision_checker, motion_primitives[i], backwards)) {
+        continue;
+      }
+      const float cost = getTraversalCost(&candidate);
+      if (getAccumulatedCost() + cost >= neighbor->getAccumulatedCost()) {
+        continue;
+      }
+      const bool queued = std::find(neighbors.begin(), neighbors.end(), neighbor) != neighbors.end();
+      if (queued && cost >= getTraversalCost(neighbor)) {
+        continue;
+      }
+      neighbor->pose = candidate.pose;
+      neighbor->_cell_cost = candidate._cell_cost;
+      neighbor->setMotionPrimitive(motion_primitives[i]);
+      neighbor->backwards(backwards);
+      if (!queued) {
         neighbors.push_back(neighbor);
-      } else {
-        neighbor->setPose(initial_node_coords);
       }
     }
   }

@@ -26,7 +26,12 @@ def validate_polygons(polygons):
             vertices.append(tuple(float(v) for v in point))
         xs, ys = zip(*vertices)
         x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-        if x1 - x0 < .05 - 1e-6 or y1 - y0 < .05 - 1e-6:
+        # ROS Polygon carries Point32. At airport coordinates its spacing can
+        # exceed 1 micrometre. Bound the allowance to one ULP per axis.
+        def min_width(lo, hi):
+            exponent = math.frexp(max(abs(lo), abs(hi)))[1]
+            return .05 - min(.0001, max(1e-6, math.ldexp(1., exponent - 24)))
+        if x1 - x0 < min_width(x0, x1) or y1 - y0 < min_width(y0, y1):
             raise ValueError('진입 금지 구역의 너비와 높이는 5 cm 이상이어야 합니다')
         expected = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
         if set(vertices) != set(expected):
@@ -68,6 +73,23 @@ def pose_allowed(polygons, x, y, yaw):
         return False
     footprint = footprint_at(x, y, yaw)
     return not any(intersects(footprint, polygon) for polygon in polygons)
+
+
+def grid_goal_error(x, y, yaw, origin, resolution, width, height, cells):
+    """Check every occupied or unknown grid cell touched by the padded footprint."""
+    ox, oy, heading = origin
+    c, s = math.cos(heading), math.sin(heading)
+    polygon = [((c*(px-ox) + s*(py-oy))/resolution,
+                (-s*(px-ox) + c*(py-oy))/resolution) for px, py in footprint_at(x, y, yaw)]
+    xs, ys = zip(*polygon)
+    if min(xs) < 0 or min(ys) < 0 or max(xs) >= width or max(ys) >= height:
+        return '차체가 지도 범위를 벗어납니다'
+    for j in range(math.floor(min(ys)), math.floor(max(ys))+1):
+        for i in range(math.floor(min(xs)), math.floor(max(xs))+1):
+            value = cells[j*width+i]
+            if (value < 0 or value >= 65) and intersects(polygon, ((i,j),(i+1,j),(i+1,j+1),(i,j+1))):
+                return '차체 일부가 관측되지 않은 영역과 겹칩니다' if value < 0 else '차체가 점유된 위치와 겹칩니다'
+    return ''
 
 
 def motion_allowed(polygons, pose, vx, wz):
@@ -155,7 +177,17 @@ class KeepoutManager:
     def goal_allowed(self, pose):
         q = pose.orientation
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y*q.y + q.z*q.z))
-        return pose_allowed(self.polygons, pose.position.x, pose.position.y, yaw)
+        if not pose_allowed(self.polygons, pose.position.x, pose.position.y, yaw):
+            return False
+        grid = self.node.map_grid
+        if grid is None:
+            return False
+        origin = grid.info.origin
+        q = origin.orientation
+        heading = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+        return not grid_goal_error(pose.position.x, pose.position.y, yaw,
+            (origin.position.x, origin.position.y, heading), grid.info.resolution,
+            grid.info.width, grid.info.height, grid.data)
 
     def command_allowed(self, vx, wz):
         if (vx == 0. and wz == 0.) or not self.polygons:
@@ -165,7 +197,7 @@ class KeepoutManager:
             stamped = self.node.tf_buffer.lookup_transform('map', self.node.p['base_frame'], Time())
             stamp = stamped.header.stamp.sec * 1_000_000_000 + stamped.header.stamp.nanosec
             age = (self.node.now_ns() - stamp) * 1e-9
-            if not -self.node.p['future_tf_tolerance'] <= age < .20:
+            if not -self.node.p['future_tf_tolerance'] <= age < min(self.node.p['map_tf_timeout'], self.node.p['odom_timeout']):
                 return False
             tr = stamped.transform
             q = tr.rotation

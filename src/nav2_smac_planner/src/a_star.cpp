@@ -312,7 +312,7 @@ bool AStarAlgorithm<NodeT>::createPath(
       std::chrono::duration<double> planning_duration =
         std::chrono::duration_cast<std::chrono::duration<double>>(steady_clock::now() - start_time);
       if (static_cast<double>(planning_duration.count()) >= _max_planning_time) {
-        return false;
+        throw nav2_core::PlannerTimedOut("exceeded planning time budget");
       }
     }
 

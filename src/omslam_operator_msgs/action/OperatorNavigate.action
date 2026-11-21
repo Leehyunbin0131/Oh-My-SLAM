@@ -5,6 +5,7 @@ geometry_msgs/PoseStamped pose
 bool success
 string message
 int32 status
+uint16 error_code
 string internal_goal_id
 ---
 geometry_msgs/PoseStamped current_pose

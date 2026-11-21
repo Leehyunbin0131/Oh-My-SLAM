@@ -100,6 +100,20 @@
         "test/test_lattice_terminal.cpp"
       ],
       "reason": "Validate the continuous start, incoming lattice primitives, and analytic shortcuts against the swept filled footprint. Retain independent final validation. Index lethal and prohibited unknown cells once per search and query each occupied polygon column span for efficient checks beside inflated or unknown boundaries. Calculate incoming costs independently and wrap reflected heading indices."
+    },
+    {
+      "path": "patches/0006-preserve-terminal-turn-and-timeout.patch",
+      "sha256": "200fc84265e18aad3318ca722ab3405e4e711bd9b207f8712cc6ec50a5f4f5fd",
+      "apply_from": "nav2_smac_planner",
+      "changed_upstream_files": [
+        "src/a_star.cpp",
+        "src/smac_planner_lattice.cpp",
+        "src/node_lattice.cpp"
+      ],
+      "changed_local_files": [
+        "test/test_lattice_terminal.cpp"
+      ],
+      "reason": "Check both terminal rotation directions and start-heading connectors, preserve better lattice neighbors, reject out-of-grid endpoints, and propagate planning timeouts."
     }
   ],
   "files": {
@@ -388,8 +402,8 @@
     "src/a_star.cpp": {
       "source_path": "nav2_smac_planner/src/a_star.cpp",
       "upstream_sha256": "5e33a489ff3eb77ff607326d7552798a1155023b7d82b669988b61d786fa9126",
-      "vendored_sha256": "5e33a489ff3eb77ff607326d7552798a1155023b7d82b669988b61d786fa9126",
-      "modified": false
+      "vendored_sha256": "d55e8f0c0932f28841d744b4f5dd6fb2fbb9b664e0eb74cea9e8f89a92ed891a",
+      "modified": true
     },
     "src/analytic_expansion.cpp": {
       "source_path": "nav2_smac_planner/src/analytic_expansion.cpp",
@@ -430,7 +444,7 @@
     "src/node_lattice.cpp": {
       "source_path": "nav2_smac_planner/src/node_lattice.cpp",
       "upstream_sha256": "0e7431d8e65b20a8376c69647b34bf93937982632e7e8182df829e8b2c737836",
-      "vendored_sha256": "662f5c971373e8a547df139be453472a785e3d6a2747a14d66f72a45f56d1528",
+      "vendored_sha256": "1e109fa42fdc23bc44d9a1f29402190806a10b15fc64643690e526d9858e0909",
       "modified": true
     },
     "src/smac_planner_2d.cpp": {
@@ -448,7 +462,7 @@
     "src/smac_planner_lattice.cpp": {
       "source_path": "nav2_smac_planner/src/smac_planner_lattice.cpp",
       "upstream_sha256": "21510b24f2b60b06e50451052c7857d955ca7bf6595e3e075eb5a1553a41850c",
-      "vendored_sha256": "7fdd3d153331d3f34e2014f5abe5bf083b470a42e68ca7f8b51746b7b37a9b91",
+      "vendored_sha256": "033e7a57a86d5118efd187d0b0badb25d2f22fd68065df21398c0b81396c35a5",
       "modified": true
     },
     "src/smoother.cpp": {
@@ -608,7 +622,7 @@
       "source_path": null,
       "upstream_sha256": null,
       "added_by_patch": "patches/0004-align-terminal-path-with-controller.patch",
-      "vendored_sha256": "145248f8d807ce98b1e0c06405dbeebacce931a06767c3ebccce4ae4bb55ea61",
+      "vendored_sha256": "701f90d0df576876d68fcfd5879fe1eb824363e13b585dafc4747236b4324fda",
       "modified": true
     }
   },
@@ -618,7 +632,8 @@
     "patches/0002-reject-smoother-boundary-outside-map.patch",
     "patches/0003-validate-final-footprints-and-bounds.patch",
     "patches/0004-align-terminal-path-with-controller.patch",
-    "patches/0005-validate-start-and-incoming-lattice-edges.patch"
+    "patches/0005-validate-start-and-incoming-lattice-edges.patch",
+    "patches/0006-preserve-terminal-turn-and-timeout.patch"
   ],
   "reproduction": [
     "Download the pinned upstream archive and extract nav2_smac_planner/.",

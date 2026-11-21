@@ -130,8 +130,8 @@ class RecordWriter:
             line = json.dumps(record, ensure_ascii=False, separators=(',', ':'), allow_nan=False) + '\n'
             size = len(line.encode('utf-8')) + (len(blob[1]) if blob else 0)
         except (ValueError, TypeError) as exc:
-            self.fail('record serialization failed: ' + str(exc))
             with self.lock:
+                self.last_invalid_record = str(exc)
                 self.received += 1
                 self.dropped += 1
             return False
@@ -194,6 +194,7 @@ class RecordWriter:
         with self.lock:
             return {'directory': str(self.directory), 'status': 'error' if self.error else
                     'stopped' if stopped else 'recording', 'error': self.error,
+                    'last_invalid_record': getattr(self, 'last_invalid_record', ''),
                     'received': self.received, 'written': self.written, 'dropped': self.dropped,
                     'bytes_written': self.bytes_written, 'queued_bytes': self.queued_bytes}
 
@@ -543,8 +544,15 @@ def main(argv=None):
         atomic_json(writer.directory / 'metadata.json', metadata(args.workspace, not args.real_time, args.namespace))
         node = PathDebugNode(writer, args.workspace, not args.real_time, args.namespace)
         print('경로 디버깅 기록: ' + str(writer.directory), flush=True)
-        while rclpy.ok() and not stopped.is_set():
-            rclpy.spin_once(node, timeout_sec=.1)
+        from rclpy.executors import SingleThreadedExecutor
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        try:
+            while rclpy.ok() and not stopped.is_set():
+                executor.spin_once(timeout_sec=.1)
+        finally:
+            executor.remove_node(node)
+            executor.shutdown()
         result = 0
     except Exception as exc:
         writer.fail(str(exc))

@@ -10,8 +10,8 @@ class ModeGuard:
     """Retain an advisory lock until launch shuts down; never unlink its inode."""
 
     def __init__(self, mode, directory=None, domain=None):
-        domain = int(os.environ.get('ROS_DOMAIN_ID', '0') if domain is None else domain)
-        directory = Path(directory or os.environ.get('XDG_RUNTIME_DIR') or tempfile.gettempdir())
+        domain = int((os.environ.get('ROS_DOMAIN_ID') or '0') if domain is None else domain)
+        directory = Path(directory or '/tmp')
         self.path = directory / f'omslam-map-{os.getuid()}-domain-{domain}.lock'
         self._file = self.path.open('a+', encoding='utf-8')
         try:
