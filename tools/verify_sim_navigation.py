@@ -755,10 +755,14 @@ class NavigationRun:
         from rclpy.time import Time
         from scipy.spatial.transform import Rotation
         msg=self.depth_pending[0]
-        if self.sim_time-stamp_s(msg.header.stamp)>.3:
-            self.depth_pending.popleft();return
-        try:tf=self.buffer.lookup_transform('camera_optical_frame','odom',Time.from_msg(msg.header.stamp)).transform
-        except Exception:return
+        # This observer projects historical raw pixels at their acquisition
+        # stamp. Sensor and costmap latency are evaluated independently below.
+        try:
+            tf = self.buffer.lookup_transform('camera_optical_frame','odom',Time.from_msg(msg.header.stamp)).transform
+        except Exception:
+            if self.sim_time - stamp_s(msg.header.stamp) > 2.:
+                self.depth_pending.popleft()
+            return
         self.depth_pending.popleft()
         info=self.samples['/camera/depth/camera_info'][-1][1]
         dtype=('<' if not msg.is_bigendian else '>')+('f4' if msg.encoding=='32FC1' else 'u2')
