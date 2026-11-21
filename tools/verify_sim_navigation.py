@@ -1016,8 +1016,16 @@ class NavigationRun:
         from gz.msgs10.boolean_pb2 import Boolean
         request=Pose(name=name);request.position.x=center[0];request.position.y=center[1]
         request.position.z=self.course['objects'][name]['size'][2]/2;request.orientation.w=1.
-        ok,response=self.gz.request('/world/p4_course/set_pose',request,Pose,Boolean,1000)
-        if not ok or not response.data:raise RuntimeError('Gazebo object move failed: '+name)
+        # set_pose is idempotent. A missing service reply must not silently
+        # advance the observer's object pose or end an otherwise valid trial.
+        for attempt in range(3):
+            ok,response=self.gz.request('/world/p4_course/set_pose',request,Pose,Boolean,1000)
+            if ok and response.data:
+                break
+            self.event('object_move_retry',name=name,attempt=attempt+1,transport_ok=ok)
+            self.pump(.02)
+        else:
+            raise RuntimeError('Gazebo failed to acknowledge the object pose: '+name)
         self.active_objects[name]=list(center)
         self.object_positions.append({'name':name,'time':self.sim_time,'center':list(center)})
 
