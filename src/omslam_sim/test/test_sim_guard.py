@@ -59,20 +59,20 @@ def test_coupled_wheel_limit_and_zero_watermark():
     g=active_guard();command(g,vx=3.,wz=2.)
     vx,wz=g.sample(10.02)
     rpms=g.geometry.rpm(vx,wz)
-    assert max(abs(r) for r in rpms)==pytest.approx(35.)
+    assert max(abs(r) for r in rpms)==pytest.approx(g.geometry.max_rpm)
     assert wz/vx==pytest.approx(2/3)
     assert g.final(1_010_000_000,0.,0.,10.03)
     assert not g.final(1_010_000_000,.2,.4,10.04)
     assert g.sample(10.04)==(0.,0.)
 
 
-def test_simulation_default_accepts_35_rpm_straight_before_expiring():
+def test_simulation_default_accepts_42_rpm_straight_before_expiring():
     guard = active_guard()
-    maximum = 2 * math.pi * .068 * 35 / 60
+    maximum = 2 * math.pi * .068 * 42 / 60
     command(guard, vx=maximum, wz=0.)
     assert guard.geometry.max_rpm == 42.
     assert guard.sample(10.02) == pytest.approx((maximum, 0.))
-    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((35., 35.))
+    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((42., 42.))
     assert guard.sample(10.32) == (0., 0.)
 
 

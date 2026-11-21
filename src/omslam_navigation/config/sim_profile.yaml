@@ -27,7 +27,7 @@ controller_server:
       rot_stopped_velocity: 0.02
     FollowPath:
       min_vel_x: 0.0
-      # 35 RPM at the simulation wheel radius of 0.068 m.
+      # Straight-line speed at the wheel limit and 0.068 m wheel radius.
       max_vel_x: 0.2990796206217483
       min_vel_y: 0.0
       max_vel_y: 0.0
