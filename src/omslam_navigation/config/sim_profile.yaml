@@ -5,6 +5,9 @@ planner_server:
       # Keep a grid approximation inside the 8 cm exact-goal connector.
       # A 10 cm fallback returned outside it on both recorded G5 grids.
       tolerance: 0.04
+      # Include the observed 3.05 m corridor approach in the collision- and
+      # cost-checked analytic expansion. A shorter cutoff forced a 10 cm detour.
+      analytic_expansion_max_length: 4.0
       max_planning_time: 2.0
 
 controller_server:

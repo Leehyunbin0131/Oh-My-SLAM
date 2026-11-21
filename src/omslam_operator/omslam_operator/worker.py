@@ -176,11 +176,12 @@ class ConsoleNode(Node):
                            durability=DurabilityPolicy.TRANSIENT_LOCAL))
             self.sub(String,'/operator/path_debug/status',self.path_debug_status,transient)
         self.sub(OperatorState,'/operator/state',self.operator,transient)
-        self.sub(KeepoutZones,'/operator/keepouts',lambda m:self.assign('keepouts',plain(m)),transient)
+        self.map_input_qos = transient
+        self.map_inputs = []
+        self.subscribe_map_inputs()
         self.sub(String,'/navigation/state',self.navigation,transient)
         self.sub(DiagnosticArray,'/diagnostics',self.diagnostics,10)
         self.sub(MotorTelemetry,'/base/motor_state',lambda m:self.assign('motor',plain(m)),10)
-        self.sub(OccupancyGrid,'/map',lambda m:self.grid('map',m),transient)
         self.sub(Path,'/plan',self.path,10)
         for topic in ('/wheel/odometry','/odom'):
             self.sub(Odometry,topic,lambda m,t=topic:self.velocity(t,m.twist.twist),sensor)
@@ -243,6 +244,17 @@ class ConsoleNode(Node):
             self.cloud_subscriptions.clear()
             for topic in ('/camera/points', '/perception/obstacles'):
                 self.pending_samples.pop(topic, None)
+
+    def subscribe_map_inputs(self):
+        # A single publication from the new map server may precede its first
+        # guard heartbeat. Rematching retrieves that server's transient sample.
+        for subscription in self.map_inputs:
+            self.destroy_subscription(subscription)
+        self.map_inputs = [
+            self.sub(OccupancyGrid, '/map', lambda msg: self.grid('map', msg), self.map_input_qos),
+            self.sub(KeepoutZones, '/operator/keepouts',
+                     lambda msg: self.assign('keepouts', plain(msg)), self.map_input_qos),
+        ]
 
     def sub(self,typ,topic,callback,qos):
         def receive(message):
@@ -369,6 +381,8 @@ class ConsoleNode(Node):
                 self.s.path_candidate=candidate if candidate and candidate[0]>=self.s.path_start_ns else None
                 if candidate and not self.s.path_blocked and candidate[0]>=self.s.path_start_ns:
                     self.assign('path',candidate[1])
+        if replaced:
+            self.subscribe_map_inputs()
         sig=str((state.get('mode'),state.get('phase'),state.get('reason')))
         if sig!=self.last_event_signature:
             self.s.event('제어 상태: '+str(state.get('mode',''))+' / '+str(state.get('reason','')))

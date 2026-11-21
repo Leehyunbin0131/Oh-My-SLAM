@@ -620,6 +620,8 @@ class Run:
             yield from self.map_operation('localize',lambda:self.map_path('mapLoadButton',str(prefix)+'.yaml'))
             yield from self.wait('localization disabled waiting pose',lambda:self.op().get('session_id')!=old_session and not self.op().get('base_active'),10.)
             yield from self.wait('new localization state shown in UI',lambda:self.model.guard_session==self.op().get('session_id') and self.model.ui.get('needsInitialPose'),3.)
+            yield from self.wait('new AMCL map available for pose placement',
+                                 lambda: bool(self.model.controlUi.get('canSetInitialPose')), 10.)
             E.check('load_requires_initial_pose',not self.op()['auto_ready'] and self.model.ui.get('needsInitialPose'),operator=self.op())
             yield from self.map_operation('initialpose',lambda:self.initial_pose_ui(initial))
             yield from self.wait('AMCL ready after initialpose',lambda:self.op().get('auto_ready'),30.)

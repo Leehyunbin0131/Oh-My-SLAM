@@ -17,10 +17,11 @@ def fixture():
         accepted, result = Future(), Future()
         requests.append((accepted, result))
         return accepted
-    receiver = SimpleNamespace(s=shared, path_debug_pub=None,
+    receiver = SimpleNamespace(s=shared, path_debug_pub=None, map_rejoins=[],
         get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=clock[0])),
         pending_samples={}, navigate=SimpleNamespace(server_is_ready=lambda: True, send_goal_async=send),
         project=lambda points, frame, stamp: points)
+    receiver.subscribe_map_inputs = lambda: receiver.map_rejoins.append(True)
     receiver.assign=lambda *args: ConsoleNode.assign(receiver, *args)
     receiver.debug_event=lambda *args, **kwargs: None
     data=dict(token='owner', epoch=1, x=1., y=0., yaw=0., stamp=Time(sec=100))
@@ -105,6 +106,7 @@ def test_observer_uses_authoritative_goal_across_windows_and_late_samples():
     report(112, 'second', 110)  # Old /operator/state must not resurrect it.
     assert receiver.s.data['path'] == []
     report(120, session='replacement')
+    assert receiver.map_rejoins == [True]
     report(121, 'from-previous-map', 118, session='guard')
     assert receiver.s.data['operator']['session_id'] == 'replacement'
 
