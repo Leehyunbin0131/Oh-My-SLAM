@@ -188,7 +188,7 @@ Item {
             RowLayout {Layout.fillWidth:true;spacing:8
                 Text {text:"RPM";color:"#A6B9D1";font.pixelSize:11}
                 Binding { target: speed; property: "value"; value: Number(page.ui.rpmLimit || speed.from); when: !speed.pressed; restoreMode: Binding.RestoreNone }
-                Slider {id:speed;objectName:"speedSlider";from:Number(page.ui.minRpm||1);to:Math.max(from,Number(page.ui.maxRpm||100));stepSize:Number(page.ui.rpmStep||1);snapMode:Slider.SnapAlways;onMoved:operatorModel.setRpmLimit(value);enabled:!page.ui.readOnly&&!page.ui.ownerBusy&&Boolean(page.ui.controlFresh);Layout.fillWidth:true;implicitHeight:24
+                Slider {id:speed;objectName:"speedSlider";from:Number(page.ui.minRpm||1);to:Math.max(from,Number(page.ui.maxRpm||0));stepSize:Number(page.ui.rpmStep||0.1);snapMode:Slider.SnapAlways;onMoved:operatorModel.setRpmLimit(value);enabled:!page.ui.readOnly&&!page.ui.ownerBusy&&Boolean(page.ui.controlFresh);Layout.fillWidth:true;implicitHeight:24
                     background:Rectangle {x:speed.leftPadding;y:speed.topPadding+speed.availableHeight/2-height/2;implicitHeight:3;width:speed.availableWidth;radius:2;color:"#425A74";Rectangle {width:speed.visualPosition*parent.width;height:parent.height;radius:2;color:"#6AA9FF"}}
                     handle:Rectangle {x:speed.leftPadding+speed.visualPosition*(speed.availableWidth-width);y:speed.topPadding+speed.availableHeight/2-height/2;width:13;height:13;radius:7;color:"#8EBDFF";border.color:speed.activeFocus?"#E8EEF6":"transparent"}
                     Accessible.name:"바퀴 RPM 상한"
@@ -196,15 +196,15 @@ Item {
                 Field {
                     id:rpmValue; objectName:"rpmLimitInput"; Layout.preferredWidth:65; implicitHeight:32
                     enabled:!page.ui.readOnly&&!page.ui.ownerBusy&&Boolean(page.ui.controlFresh); horizontalAlignment:Text.AlignRight
-                    validator:DoubleValidator {bottom:Number(page.ui.minRpm||1);top:Number(page.ui.maxRpm||100);decimals:1;notation:DoubleValidator.StandardNotation}
+                    validator:DoubleValidator {bottom:Number(page.ui.minRpm||1);top:Number(page.ui.maxRpm||0);decimals:1;notation:DoubleValidator.StandardNotation}
                     Accessible.name:"바퀴 RPM 상한 직접 입력"
                     onEditingFinished: {
                         if (acceptableInput && text.trim()!=="") operatorModel.setRpmLimit(Number.fromLocaleString(Qt.locale(),text))
                     }
-                    Binding {target:rpmValue;property:"text";value:Number(page.ui.rpmLimit||0).toLocaleString(Qt.locale(),'f',1);when:!rpmValue.activeFocus;restoreMode:Binding.RestoreNone}
+                    Binding {target:rpmValue;property:"text";value:page.ui.controlFresh && page.ui.maxRpm>0 ? Number(page.ui.rpmLimit).toLocaleString(Qt.locale(),'f',1) : "—";when:!rpmValue.activeFocus;restoreMode:Binding.RestoreNone}
                 }
             }
-            Text {text:"바퀴별 상한 · 최대 "+Number(page.ui.maxRpm||100).toFixed(0)+" RPM";color:"#8BA4C0";font.pixelSize:10}
+            Text {text:page.ui.controlFresh && page.ui.maxRpm>0 ? "바퀴별 상한 · 최대 "+Number(page.ui.maxRpm).toFixed(0)+" RPM" : "바퀴별 상한 확인 중";color:"#8BA4C0";font.pixelSize:10}
             ActionButton {objectName:"moveButton";text:page.moving?"이동 중":"이동";iconName:"play";kind:"primary";Layout.fillWidth:true;implicitHeight:40;enabled:page.goalCount>0&&!page.addingGoal&&!page.addingKeepout&&page.editable&&Boolean(page.ui.mapReady)&&!page.ui.needsInitialPose;onClicked:page.startRoute()}
         }
     }

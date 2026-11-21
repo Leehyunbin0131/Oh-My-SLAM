@@ -50,7 +50,7 @@ Jazzy의 `velocity_smoother`와 `collision_monitor`는 설치된 Nav2 1.3 계열
 | 호스트 송신 / 상태 수신 | 최대 50 Hz / 약 20 Hz |
 | command lease | 100–300 ms, 원본 생성 시각의 유효기간 보존 |
 | 피드백 중단 | 호스트 400 ms 기준 |
-| 바퀴 상한 | 실물 운용 95 RPM / MCU 보호 100 RPM / 시뮬레이션 100 RPM |
+| 바퀴 상한 | 실물 운용 95 RPM / MCU 보호 100 RPM / 시뮬레이션 35 RPM |
 | 정상 0 속도 | 제동/HOLD |
 | `STOP` | 제어·출력 해제 |
 
@@ -77,7 +77,7 @@ Jazzy의 `velocity_smoother`와 `collision_monitor`는 설치된 Nav2 1.3 계열
 | --- | --- |
 | Mega 펌웨어·공통 통신/보정 | 버전 고정 재사용. ROS 명령 시각을 전달하는 원본 시각을 받는 호환 호스트 API 확장을 vendor에 반영 |
 | 원본 description·mesh | provenance·라이선스 유지, 필요한 경로만 설치 |
-| Gazebo 모델·센서·월드 | 공통 ROS 계약과 시뮬레이션 100 RPM 한도 적용 |
+| Gazebo 모델·센서·월드 | 공통 ROS 계약과 시뮬레이션 35 RPM 한도 적용 |
 | `omm_perception`, `omm_perception_msgs` | 기존 바닥 분리·낮은 장애물 기억 기능 이관 |
 | `omm_costmap_layers` | camera memory 레이어 이관. 보로노이 전용 레이어는 초기 구성에서 제외 |
 | State Lattice | 새 기본 전역 계획기. 차동구동 움직임 집합·footprint·costmap 해상도를 새 공통 계약에 맞춰 고정 |

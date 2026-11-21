@@ -107,7 +107,7 @@ rpm_L/R = omega_L/R * 60 / (2*pi)
 
 바퀴 상한을 넘으면 좌우에 같은 비율을 곱해 곡률을 보존합니다. 작은 명령을 임의로 30 RPM까지 올리지 않습니다. 기본 실물 시험이 성공한 30 RPM과 Nav2의 목표 근처 저속 제어 가능 범위는 별도로 확인합니다.
 
-현재 모델의 `r=0.068 m`, `b=0.480 m`는 초기값입니다. 이 값에서는 30 RPM 직진이 약 0.214 m/s, 양쪽 ±30 RPM 제자리 회전이 약 0.890 rad/s입니다. 실물 유효 반경·윤거는 지면에서 거리·회전각으로 보정합니다. 실물 운용 상한 95 RPM은 MCU 보호 상한 100 RPM과 구분하며, 시뮬레이션의 바퀴별 상한은 100 RPM(직진 약 0.712 m/s)입니다.
+현재 모델의 `r=0.068 m`, `b=0.480 m`는 초기값입니다. 이 값에서는 30 RPM 직진이 약 0.214 m/s, 양쪽 ±30 RPM 제자리 회전이 약 0.890 rad/s입니다. 실물 유효 반경·윤거는 지면에서 거리·회전각으로 보정합니다. 실물 운용 상한 95 RPM은 MCU 보호 상한 100 RPM과 구분하며, 시뮬레이션의 바퀴별 상한은 35 RPM(직진 약 0.249 m/s)입니다.
 
 odometry는 **측정 엔코더 변화량**으로 계산합니다.
 
@@ -198,7 +198,7 @@ Gazebo truth는 SLAM·EKF·Nav2 입력으로 사용하지 않습니다. 순수 �
 
 - **공통 전역 계획·지역 제어 기준 (`State Lattice` + `DWB`)**: 시뮬레이션과 실물 모두 `nav2_smac_planner::SmacPlannerLattice` 전역 계획기와 `dwb_core::DWBLocalPlanner` 지역 제어기를 사용합니다. State Lattice는 위치·방향과 기본 움직임 집합으로 경로를 탐색하고, DWB는 현재 속도·주변 장애물에 맞는 지역 궤적을 평가해 명령을 선택합니다. 전역·지역 양쪽에 같은 기준의 사각형 footprint와 padding을 적용합니다.
 - **목표 접근·방향 정렬 계약**: launch는 도착 판정의 XY 허용오차를 Lattice와 DWB에 함께 전달합니다. 이 범위 안에서 Lattice는 현재 위치의 회전과 원래 목표까지의 짧은 연결을 footprint로 검사해 반환하며, 장애물과 unknown을 통과시키지 않습니다. 실제 성공은 원래 목표 방향과 측정 정지를 확인하는 `StoppedGoalChecker`가 판정합니다. 전역 탐색의 heuristic tolerance와 물리적 XY 도착 범위는 구분합니다.
-- **DWB 구동·충돌 계약**: 차동구동의 측면 속도는 `vy=0`으로 고정합니다. 속도·가감속 한도는 검증된 구동 범위에 맞추고 base의 바퀴별 상한(실물 95 RPM, 시뮬레이션 100 RPM)을 유지합니다. 사각형 footprint와 padding을 적용한 `ObstacleFootprint` critic을 필수로 사용하며, 충돌하는 후보는 경로·목표 비용이 낮아도 거부합니다. 경로 정렬·목표 도착·진동 억제 평가의 가중치와 속도 샘플은 P4의 코너·낮은 장애물·막힌 통로 시나리오에서 조정합니다. [DWB 설정](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/), [ObstacleFootprintCritic](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/trajectory_critics/obstacle_footprint/)
+- **DWB 구동·충돌 계약**: 차동구동의 측면 속도는 `vy=0`으로 고정합니다. 속도·가감속 한도는 검증된 구동 범위에 맞추고 base의 바퀴별 상한(실물 95 RPM, 시뮬레이션 35 RPM)을 유지합니다. 사각형 footprint와 padding을 적용한 `ObstacleFootprint` critic을 필수로 사용하며, 충돌하는 후보는 경로·목표 비용이 낮아도 거부합니다. 경로 정렬·목표 도착·진동 억제 평가의 가중치와 속도 샘플은 P4의 코너·낮은 장애물·막힌 통로 시나리오에서 조정합니다. [DWB 설정](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/), [ObstacleFootprintCritic](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/trajectory_critics/obstacle_footprint/)
 - **기본 비용지도**: 표준 static·obstacle·inflation 레이어로 기본 주행을 먼저 구성합니다. 보로노이 전용 레이어와 중앙선 선호 검증은 초기 구현·인수 범위에서 제외합니다. 기본 주행 결과로 필요성이 확인되면 별도 변경 범위로 검토하며, 현재 단계의 완료 조건에 포함하지 않습니다.
 - **State Lattice 움직임 집합**: 사전 계산한 기본 움직임 집합(motion primitives / minimum control set)을 JSON으로 설치하고 `lattice_filepath`를 명시합니다. 차동구동 `diff` 모델과 전역 costmap의 격자 해상도를 맞추며, 초기 프로파일은 아래 표를 따릅니다. 움직임 집합·설정의 출처와 해시를 고정하고 PC·Orin에서 동일한 파일을 사용합니다. [Jazzy 움직임 집합 생성기](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_smac_planner/lattice_primitives/README.md)
 - **RGB-D 낮은 장애물 기억**: 라이다 스캔 높이 아래에 있는 낮은 장애물은 깊이 카메라 기반 바닥 분리 및 3D 점유 메모리(`omm_perception` / `camera_memory` 레이어)로 감지하고, 시야 밖으로 벗어나도 지역·전역 비용지도에 유지합니다(라이다 정적 SLAM 지도와 임시 장애물 메모리는 분리).

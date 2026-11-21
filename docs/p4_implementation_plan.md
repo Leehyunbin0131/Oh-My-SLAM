@@ -477,7 +477,7 @@ I14에서 검증기가 simulator를 별도 소유하고 navigation launch는 `st
 
 인수 오차는 Nav2의 성공 응답만으로 판정하지 않습니다. 충돌 검사는 truth pose 50 Hz 표본 사이를 최대 0.01 m 또는 0.01 rad 간격으로 보간한 차체 영역과 world geometry로 확인합니다. 원본 물리 collision 형상과 보수 footprint 판정을 함께 구분합니다. 경계 접촉과 관측 오차를 숨기기 위해 truth 정합·지도·goal tolerance를 사후 변경하지 않습니다.
 
-전역 costmap 2 Hz와 카메라 10 Hz의 주기를 고려해 관측→반영 1.0 s를 초기 인수값으로 둡니다. 시간 판단에는 ROS sim time과 monotonic wall time을 모두 기록하고, pause 중 sim time 정지와 실제 command lease를 구분합니다.
+시뮬레이션 전역 costmap 4 Hz와 카메라 10 Hz의 주기를 고려해 관측→반영 1.0 s를 초기 인수값으로 둡니다. 시간 판단에는 ROS sim time과 monotonic wall time을 모두 기록하고, pause 중 sim time 정지와 실제 command lease를 구분합니다.
 
 ## 14. 빌드·실행 명령 계약
 
