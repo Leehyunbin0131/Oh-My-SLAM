@@ -816,9 +816,9 @@ if run.close_requested and not run.failure:
     attach_env=os.environ.copy(); attach_env['GZ_PARTITION']=PARTITION
     attach=subprocess.Popen([str(ROOT/'.venv-operator/bin/python'), '-m', 'omslam_operator.app',
         '--use-sim-time', '--snapshot', str(OUT/'reattach.json'), '--screenshot', str(OUT/'reattach.png'),
-        '--screenshot-delay', '3', '--quit-after', '4'], cwd='/tmp', env=attach_env,
+        '--capture-when-control-fresh', '--screenshot-delay', '0', '--quit-after', '8'], cwd='/tmp', env=attach_env,
         stdout=attach_log, stderr=subprocess.STDOUT, start_new_session=True)
-    deadline=time.monotonic()+10.
+    deadline=time.monotonic()+16.
     while attach.poll() is None and time.monotonic()<deadline:
         run.read_observer(); time.sleep(.05)
     if attach.poll() is None:

@@ -178,7 +178,7 @@ class NavigationRun:
         self.current_goal=None;self.current_future=None;self.current_entry=None;self.guard_state={}
         self.depth_record_stages={'I4','I7','I9','I10'}
         self.tf_failures=[];self.clock_reset=False;self.last_sensor_stamps={};self.stopping=False
-        self.depth_pending=deque(maxlen=5);self.depth_evidence=[]
+        self.depth_pending=deque(maxlen=40);self.depth_evidence=[]
         self.cloud_pending = deque()
         self.tf_observations=[];self.odom_observations=[];self.bt_events=[];self.object_intervals=[]
         self.map_events=[];self.graph_before=None
@@ -368,6 +368,9 @@ class NavigationRun:
             type_name=cls.__module__.split('.')[0]+'/msg/'+cls.__name__
             self.writer.create_topic(rosbag2_py.TopicMetadata(id=topic_id,name=topic,type=type_name,serialization_format='cdr'))
             qos=transient if topic in transient_topics else qos_profile_sensor_data
+            if topic == '/camera/depth/image_rect_raw':
+                # Preserve every probe frame while writing costmap and image bags.
+                qos = QoSProfile(depth=40, reliability=ReliabilityPolicy.RELIABLE)
             self.node.create_subscription(cls,topic,partial(self.receive,topic),qos)
         self.stop_samples = deque(maxlen=150)
         self.braking_truth = deque(maxlen=150)
@@ -1120,7 +1123,7 @@ class NavigationRun:
             # far end of the open gate. Survey from the entrance before the
             # acceptance goal, leaving the gate test and goal coordinates fixed.
             surveyed = False
-            for index, view in enumerate(([5.55, 3.88, .12], [5.65, 4.12, -.12]), 1):
+            for index, view in enumerate(([5.10, 3.88, .12], [5.16, 4.12, -.12], [5.55, 3.88, .12]), 1):
                 if self.grid_free([9,4,0]):
                     break
                 self.goto(view, f'I6_observe_entrance_{index}')
@@ -1129,6 +1132,14 @@ class NavigationRun:
             if surveyed:
                 self.e.detail('I6.survey_before_gate', self.map_pose()[0] < 6.,
                               pose=self.map_pose().tolist(), goal_observed=self.grid_free([9,4,0]))
+            if self.map_pose()[0] > 5.25:
+                # Leave enough room to turn after aborting the forward-only
+                # goal. Return from the survey with the measured start pose.
+                here = self.map_pose()
+                self.goto([*here[:2], math.pi], 'I6_turn_from_survey')
+                self.goto([4.95,4,math.pi], 'I6_return_from_survey')
+                here = self.map_pose()
+                self.goto([*here[:2], 0.], 'I6_align_before_closure')
             self.stage='I6';path_count=len(self.paths);self.send_goal([9,4,0],'I6')
             def fresh_path():
                 if self.current_future.done():raise AssertionError('Gate preparation goal terminated before a valid path')

@@ -68,6 +68,8 @@ def main(argv=None):
     parser.add_argument('--screenshot')
     parser.add_argument('--screenshot-delay', type=float, default=1.0)
     parser.add_argument('--snapshot')
+    parser.add_argument('--capture-when-control-fresh', action='store_true',
+                        help='최신 제어 상태를 받은 뒤 화면을 기록')
     parser.add_argument('--path-debug-directory', default='',
                         help='세션이 시작한 경로 기록 디렉터리')
     parser.add_argument('--quit-after', type=float, default=0.0)
@@ -101,6 +103,9 @@ def main(argv=None):
 
         def capture():
             nonlocal capture_failed
+            if args.capture_when_control_fresh and not model.ui.get('controlFresh'):
+                QTimer.singleShot(50, capture)
+                return
             try:
                 if args.screenshot:
                     target = Path(args.screenshot).expanduser()
