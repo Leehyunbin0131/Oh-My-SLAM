@@ -898,15 +898,18 @@ class NavigationRun:
             def at_speed():
                 if not self.braking_truth:
                     return False
-                sample = self.braking_truth[-1]
-                return (abs(self.drive_clock[0] - stamp_s(sample.header.stamp)) <= .04
-                        and minimum_fraction * target_speed < sample.twist.twist.linear.x < 1.05 * target_speed)
+                now = self.drive_clock[0]
+                recent = [sample for sample in self.braking_truth.copy()
+                          if 0. <= now - stamp_s(sample.header.stamp) <= .08]
+                return (len(recent) >= 3 and now - stamp_s(recent[-1].header.stamp) <= .04
+                        and all(minimum_fraction * target_speed < sample.twist.twist.linear.x < 1.05 * target_speed
+                                for sample in recent[-3:]))
             self.until(at_speed, 25., 'reach measured speed for ' + label)
             entry = self.cancel()
             start = entry['cancel_request_stamp']
             stop = self.metrics['stops'][-1]
             truth = self.braking_truth.copy()
-            initial = min(truth, key=lambda sample: abs(stamp_s(sample.header.stamp) - start))
+            initial = next(sample for sample in reversed(truth) if stamp_s(sample.header.stamp) <= start)
             final = min(truth, key=lambda sample: abs(stamp_s(sample.header.stamp) - stop['settled_time']))
             initial_speed = initial.twist.twist.linear.x
             initial_stamp, final_stamp = stamp_s(initial.header.stamp), stamp_s(final.header.stamp)
@@ -1204,10 +1207,12 @@ class NavigationRun:
         self.e.detail('I4.raw_low_obstacle',bool(candidates),observations=len(candidates))
         observed=candidates[0]['stamp'];metrics={}
         for topic in ('/global_costmap/costmap_raw','/local_costmap/costmap_raw'):
-            events=[e for e in self.costmap_events if e['topic']==topic and e['sim_time']>=observed
-                    and e['objects'].get(name,{}).get('lethal',0)>0]
-            metrics[topic]={'marked_at':events[0]['sim_time'] if events else None,
-                            'delay':events[0]['sim_time']-observed if events else None}
+            events = [e for e in self.costmap_events if e['topic'] == topic and e['stamp'] >= observed
+                      and e['objects'].get(name, {}).get('lethal', 0) > 0]
+            first = min(events, key=lambda e: e['stamp'], default=None)
+            metrics[topic] = {'marked_at': first['stamp'] if first else None,
+                              'received_wall': first['wall_time'] if first else None,
+                              'delay': first['stamp'] - observed if first else None}
         memory=[e for e in self.memory_events if e.get(name,0)>0]
         self.e.check('V4-08',bool(memory) and all(v['delay'] is not None and v['delay']<=1. for v in metrics.values()),
                      observation_stamp=observed,costmaps=metrics,memory_first=memory[0] if memory else None)
