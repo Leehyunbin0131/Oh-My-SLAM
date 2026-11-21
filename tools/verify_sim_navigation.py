@@ -168,6 +168,9 @@ class NavigationRun:
         self.ros_errors=[];self.stage='I0';self.mode='slam';self.world_to_map=None;self.initial_odom=None
         self.odom_node=None;self.odom_executor=None;self.odom_thread=None
         self.drive_clock = (0., 0.)
+        self.final_zeros = deque(maxlen=500)
+        self.valid_frames = deque(maxlen=500)
+        self.fault_latches = deque(maxlen=100)
         self.node=None;self.context=None;self.executor=None;self.writer=None;self.recorded_topics=set()
         self.sim_time=0.;self.last_truth=None;self.minimum_clearance=float('inf');self.collision=[];self.safety_violation=None
         self.active_objects={k:list(v['center']) for k,v in self.course['objects'].items() if v['initial']}
@@ -354,9 +357,9 @@ class NavigationRun:
                 '/map':OccupancyGrid,'/global_costmap/costmap_raw':Costmap,'/local_costmap/costmap_raw':Costmap,
                 '/unsmoothed_plan':RosPath,'/plan':RosPath,'/collision_monitor_state':CollisionMonitorState,
                 '/behavior_tree_log':BehaviorTreeLog,
-                '/navigate_to_pose/_action/status':GoalStatusArray,'/slam_toolbox/graph_visualization':MarkerArray}
+                '/follow_path/_action/status':GoalStatusArray,'/navigate_to_pose/_action/status':GoalStatusArray,'/slam_toolbox/graph_visualization':MarkerArray}
         transient_topics={'/tf_static','/map','/perception/memory','/perception/health','/navigation/state',
-                          '/global_costmap/costmap_raw','/local_costmap/costmap_raw','/navigate_to_pose/_action/status'}
+                          '/global_costmap/costmap_raw','/local_costmap/costmap_raw','/follow_path/_action/status','/navigate_to_pose/_action/status'}
         self.writer=rosbag2_py.SequentialWriter()
         self.writer.open(rosbag2_py.StorageOptions(uri=str(self.e.directory/'rosbag'),storage_id='sqlite3'),
                          rosbag2_py.ConverterOptions(input_serialization_format='cdr',output_serialization_format='cdr'))
@@ -378,6 +381,31 @@ class NavigationRun:
             self.drive_clock = (stamp_s(message.clock), time.monotonic())
         self.odom_node.create_subscription(
             Clock, '/clock', observe_drive_clock, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        def observe_zero(message):
+            twist = message.twist
+            if not any((twist.linear.x, twist.linear.y, twist.linear.z,
+                        twist.angular.x, twist.angular.y, twist.angular.z)):
+                self.final_zeros.append((time.monotonic() - self.start_wall, self.drive_clock[0]))
+
+        def observe_frame(topic, message):
+            if topic == '/scan':
+                values = np.asarray(message.ranges)
+                valid = np.any(np.isfinite(values) & (values >= message.range_min) & (values <= message.range_max))
+            else:
+                dtype = ('>' if message.is_bigendian else '<') + ('f4' if message.encoding == '32FC1' else 'u2')
+                values = np.frombuffer(message.data, dtype=dtype)
+                valid = np.mean(np.isfinite(values) & (values > 0)) > .05
+            if valid:
+                self.valid_frames.append((topic, time.monotonic() - self.start_wall, stamp_s(message.header.stamp)))
+
+        def observe_state(message):
+            if json.loads(message.data)['state'] == 'FAULT_LATCHED':
+                self.fault_latches.append((time.monotonic() - self.start_wall, self.drive_clock[0]))
+
+        self.odom_node.create_subscription(String, '/navigation/state', observe_state, transient)
+        self.odom_node.create_subscription(TwistStamped, '/cmd_vel', observe_zero, 20)
+        for topic, cls in (('/scan', LaserScan), ('/camera/depth/image_rect_raw', Image)):
+            self.odom_node.create_subscription(cls, topic, partial(observe_frame, topic), qos_profile_sensor_data)
         self.odom_thread = threading.Thread(target=self.odom_executor.spin, name='stop-odometry', daemon=True)
         self.odom_thread.start()
         self.enable_client=self.node.create_client(SetBool,'/navigation/enable')
@@ -1011,16 +1039,17 @@ class NavigationRun:
         old_memory=self.object_memory('low_b')
         self.e.detail(label+'_occupied_memory_precondition',old_memory>0,occupied_voxels=old_memory)
         last_stamp=self.sensor_stamp('/scan' if name=='scan' else '/camera/depth/image_rect_raw')
-        start=self.sim_time;wall=time.monotonic()-self.start_wall
+        start=self.drive_clock[0];wall=time.monotonic()-self.start_wall
         self.call(self.fault_clients[name],self.SetBool.Request(data=True))
         self.event('sensor_fault_begin',sensor=name,last_stamp=last_stamp)
         self.until(lambda:self.guard_state.get('state')=='FAULT_LATCHED',5,'sensor fault latch')
-        latch=self.sim_time
-        self.until(lambda:any(x['topic']=='/cmd_vel' and x['sim_time']>=start and not any(x['velocity']) for x in self.command_events),2,'fault final zero')
-        zero_event=next(x for x in self.command_events if x['topic']=='/cmd_vel' and x['sim_time']>=start and not any(x['velocity']))
-        zero=zero_event['sim_time']
-        sensor_topic='/scan' if name=='scan' else '/camera/depth/image_rect_raw'
-        last_stamp=last_valid_sensor_stamp(self.sensor_observations,sensor_topic,last_stamp,zero_event)
+        self.until(lambda: any(w >= wall for w, _ in self.fault_latches.copy()), 2, 'observed fault latch')
+        latch = next(t for w, t in self.fault_latches.copy() if w >= wall)
+        self.until(lambda: any(w >= wall for w, _ in self.final_zeros.copy()), 2, 'fault final zero')
+        zero_wall, zero = next((w, t) for w, t in self.final_zeros.copy() if w >= wall)
+        sensor_topic = '/scan' if name == 'scan' else '/camera/depth/image_rect_raw'
+        last_stamp = max([last_stamp] + [stamp for topic, w, stamp in self.valid_frames.copy()
+                                        if topic == sensor_topic and w <= zero_wall and 0 < stamp <= zero])
         self.wait_stop(label,zero)
         self.until(lambda:self.current_future.done(),5,'fault goal terminal')
         response=self.current_future.result();self.current_entry.update(status=response.status,end=self.now(),error_code=response.result.error_code)
