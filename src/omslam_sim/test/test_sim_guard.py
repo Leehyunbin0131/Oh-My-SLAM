@@ -70,7 +70,7 @@ def test_simulation_default_accepts_35_rpm_straight_before_expiring():
     guard = active_guard()
     maximum = 2 * math.pi * .068 * 35 / 60
     command(guard, vx=maximum, wz=0.)
-    assert guard.geometry.max_rpm == 35.
+    assert guard.geometry.max_rpm == 42.
     assert guard.sample(10.02) == pytest.approx((maximum, 0.))
     assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((35., 35.))
     assert guard.sample(10.32) == (0., 0.)

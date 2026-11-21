@@ -28,12 +28,12 @@ controller_server:
     FollowPath:
       min_vel_x: 0.0
       # 35 RPM at the simulation wheel radius of 0.068 m.
-      max_vel_x: 0.24923301718479027
+      max_vel_x: 0.2990796206217483
       min_vel_y: 0.0
       max_vel_y: 0.0
       max_vel_theta: 0.50
       min_speed_xy: 0.0
-      max_speed_xy: 0.24923301718479027
+      max_speed_xy: 0.2990796206217483
       min_speed_theta: 0.0
       acc_lim_x: 0.25
       acc_lim_y: 0.0
@@ -95,7 +95,7 @@ behavior_server:
 velocity_smoother:
   ros__parameters:
     smoothing_frequency: 50.0
-    max_velocity: [0.24923301718479027, 0.0, 0.50]
+    max_velocity: [0.2990796206217483, 0.0, 0.50]
     min_velocity: [0.0, 0.0, -0.50]
     max_accel: [0.25, 0.0, 0.60]
     max_decel: [-0.50, 0.0, -1.00]
@@ -134,7 +134,7 @@ navigation_guard:
     readiness_timeout: 30.0
     map_jump_translation: 0.10
     map_jump_rotation: 0.10
-    max_linear_velocity: 0.24923301718479027
+    max_linear_velocity: 0.2990796206217483
     max_angular_velocity: 0.50
     future_tf_tolerance: 1.0
     lifecycle_nodes: [collision_monitor, velocity_smoother, planner_server, controller_server, behavior_server, bt_navigator]
