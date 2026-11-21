@@ -1087,6 +1087,18 @@ class NavigationRun:
             self.send_goal([9,1,0],'I5');self.blocked_result(self.finish_goal(expected=6,timeout=30))
         if 'V4-07' in wanted:
             self.goto([5,4,0],'I6_approach')
+            # Lidar rays from a single pose can miss the goal cell at the
+            # far end of the open gate. Survey from the entrance before the
+            # acceptance goal, leaving the gate test and goal coordinates fixed.
+            surveyed = False
+            for index, view in enumerate(([5.55, 3.88, .12], [5.65, 4.12, -.12]), 1):
+                if self.grid_free([9,4,0]):
+                    break
+                self.goto(view, f'I6_observe_entrance_{index}')
+                self.wait_sim(1.)
+                surveyed = True
+            if surveyed:
+                self.goto([5,4,0], 'I6_return_before_gate')
             self.stage='I6';path_count=len(self.paths);self.send_goal([9,4,0],'I6')
             def fresh_path():
                 if self.current_future.done():raise AssertionError('Gate preparation goal terminated before a valid path')
