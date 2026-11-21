@@ -165,6 +165,7 @@ class NavigationRun:
         self.memory_events=[];self.cloud_events=[];self.costmap_events=[];self.command_events=[];self.sensor_observations=[]
         self.ros_errors=[];self.stage='I0';self.mode='slam';self.world_to_map=None;self.initial_odom=None
         self.odom_node=None;self.odom_executor=None;self.odom_thread=None
+        self.drive_clock = (0., 0.)
         self.node=None;self.context=None;self.executor=None;self.writer=None;self.recorded_topics=set()
         self.sim_time=0.;self.last_truth=None;self.minimum_clearance=float('inf');self.collision=[];self.safety_violation=None
         self.active_objects={k:list(v['center']) for k,v in self.course['objects'].items() if v['initial']}
@@ -269,7 +270,7 @@ class NavigationRun:
                 'previous':e.previous_status,'current':e.current_status} for e in msg.event_log)
         if topic in ('/cmd_vel/nav','/cmd_vel/requested','/cmd_vel/smoothed','/cmd_vel/monitored','/cmd_vel','/sim/cmd_vel'):
             twist=msg.twist if hasattr(msg,'twist') else msg
-            self.command_events.append({**self.now(),'topic':topic,'stamp':stamp_s(msg.header.stamp) if hasattr(msg,'header') else None,
+            self.command_events.append({**self.now(),'drive_clock':self.drive_clock[0],'topic':topic,'stamp':stamp_s(msg.header.stamp) if hasattr(msg,'header') else None,
                 'frame':msg.header.frame_id if hasattr(msg,'header') else None,
                 'velocity':[twist.linear.x,twist.linear.y,twist.linear.z,twist.angular.x,twist.angular.y,twist.angular.z]})
         if topic=='/perception/memory':self.observe_memory(msg)
@@ -365,6 +366,10 @@ class NavigationRun:
         self.odom_node.create_subscription(
             Odometry, '/odom', lambda msg: self.stop_samples.append((time.monotonic(), msg)),
             QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT))
+        def observe_drive_clock(message):
+            self.drive_clock = (stamp_s(message.clock), time.monotonic())
+        self.odom_node.create_subscription(
+            Clock, '/clock', observe_drive_clock, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.odom_thread = threading.Thread(target=self.odom_executor.spin, name='stop-odometry', daemon=True)
         self.odom_thread.start()
         self.enable_client=self.node.create_client(SetBool,'/navigation/enable')
@@ -841,12 +846,17 @@ class NavigationRun:
         self.send_goal(goal,label);return self.finish_goal()
 
     def cancel(self):
-        start=self.sim_time;handle=self.current_goal
-        self.event('cancel_request', uuid=self.current_entry['id'])
+        start, clock_received = self.drive_clock
+        if time.monotonic() - clock_received > .05:
+            raise AssertionError('No fresh independent clock at cancel request')
+        request_wall = time.monotonic() - self.start_wall
+        handle=self.current_goal
+        self.event('cancel_request', uuid=self.current_entry['id'], request_stamp=start, request_wall=request_wall)
         future=handle.cancel_goal_async();self.until(future.done,5,'cancel response')
         response=future.result();self.event('cancel_response',goals_canceling=len(response.goals_canceling))
         self.e.detail('cancel_accepted',bool(response.goals_canceling))
         entry=self.finish_goal(expected=5,timeout=10,stop_trigger=start)
+        entry.update(cancel_request_stamp=start, cancel_request_wall=request_wall)
         terminal=entry['end']['wall_time']
         late=late_cancel_commands(self.command_events,start,terminal)
         self.e.detail('cancel_no_late_nonzero',not late,late=late)
@@ -870,19 +880,21 @@ class NavigationRun:
             minimum_fraction = .985 if rpm == cap else .94
             self.until(lambda: minimum_fraction * target_speed < self.trajectory[-1]['velocity'][0] < 1.05 * target_speed,
                        25., 'reach measured speed for ' + label)
-            start = self.sim_time
-            position = self.pose().copy()
-            initial_speed = self.trajectory[-1]['velocity'][0]
-            self.cancel()
+            entry = self.cancel()
+            start = entry['cancel_request_stamp']
+            initial = min(self.trajectory, key=lambda row: abs(row['stamp'] - start))
+            initial_speed = initial['velocity'][0]
             stop = self.metrics['stops'][-1]
-            zero = next((row['sim_time'] for row in self.command_events
+            final = min(self.trajectory, key=lambda row: abs(row['stamp'] - stop['settled_time']))
+            zero = next((row['drive_clock'] for row in self.command_events
                          if row['topic'] == '/sim/cmd_vel' and not any(row['velocity'])
-                         and row['sim_time'] >= start), None)
+                         and row['wall_time'] >= entry['cancel_request_wall']), None)
             self.e.check(label, zero is not None and stop['duration_s'] <= 1., requested_rpm=rpm,
                          configured_cap_rpm=cap, speed_limit_percent=limit.speed_limit, initial_vx=initial_speed,
                          cancel_request=start, first_zero_received=zero,
                          first_stopped=stop['first_stop_stamp_ns'] * 1e-9, confirmed=stop['settled_time'],
-                         duration_s=stop['duration_s'], distance_m=math.dist(self.pose()[:2], position[:2]))
+                         duration_s=stop['duration_s'], distance_m=math.dist(initial['world'][:2], final['world'][:2]),
+                         truth_start_stamp=initial['stamp'], truth_stop_stamp=final['stamp'])
         limit.speed_limit = 100.
         limit.header.stamp = self.node.get_clock().now().to_msg()
         publisher.publish(limit)
