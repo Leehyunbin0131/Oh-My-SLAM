@@ -205,7 +205,7 @@ Nav2 lifecycle manager는 collision monitor·smoother·planner·controller·wait
 | planner 제한 | `allow_unknown=false`, `tolerance=0.04 m`, `max_planning_time=2.0 s`, `cache_obstacle_heuristic=false` |
 | 경로 후처리 | `smooth_path=true`인 Smac 내장 후처리만 사용; 별도 smoother server 추가하지 않음. 최종 경로도 footprint 충돌 검사 |
 | controller | ID `FollowPath`, `dwb_core::DWBLocalPlanner`, 20 Hz |
-| 속도 | `0≤vx≤0.249233 m/s`, `vy=0`, `abs(wz)≤0.50 rad/s` |
+| 속도 | `0≤vx≤0.299080 m/s`, `vy=0`, `abs(wz)≤0.50 rad/s` |
 | 가감속 | `ax=0.25 m/s²`, 감속 `−0.50 m/s²`, `aθ=0.60 rad/s²`, 각감속 `−1.00 rad/s²` |
 | DWB 샘플 | `vx_samples=20`, `vy_samples=1`, `vtheta_samples=20`. 기본 예측은 1.7초이며, 저속에서는 허용 선속도로 지역 비용지도 두 셀(0.10 m)을 비교할 시간까지 연장한다. 병진·회전 표본 간격은 0.025 m와 0.025 rad이다. |
 | DWB 최소 속도 | `min_speed_xy=0`, `min_speed_theta=0`; 작은 속도를 임의의 최소 RPM으로 증폭하지 않음 |
@@ -221,7 +221,7 @@ Nav2 lifecycle manager는 collision monitor·smoother·planner·controller·wait
 | lidar obstacle | scan marking/clearing, obstacle 최대 8 m, raytrace 최대 10 m, 최소 0.15 m; 카메라 메모리는 라이다 clearing으로 삭제하지 않음 |
 | inflation | radius `0.55 m`, cost scaling `3.0`; 통과폭 확보는 footprint로 판정, inflation을 물리 차체 크기로 오인하지 않음 |
 
-선속도·각속도를 동시에 상한으로 사용하면 기구학적 바깥 바퀴 목표가 35 RPM을 넘을 수 있으므로 base가 좌우 비율을 유지해 제한합니다. 최종 바퀴별 명령이 **시뮬레이션 운용 상한 35 RPM 이하**인지 별도로 확인합니다. 위 속도와 가속도는 시뮬레이션 초기 프로파일이며 P5의 실측 한도를 대체하지 않습니다.
+선속도·각속도를 동시에 상한으로 사용하면 기구학적 바깥 바퀴 목표가 42 RPM을 넘을 수 있으므로 base가 좌우 비율을 유지해 제한합니다. 최종 바퀴별 명령이 **시뮬레이션 운용 상한 42 RPM 이하**인지 별도로 확인합니다. 위 속도와 가속도는 시뮬레이션 초기 프로파일이며 P5의 실측 한도를 대체하지 않습니다.
 
 적용 프로파일의 `ObstacleFootprint.scale`은 **0.02**입니다. 이 critic의 실효 가중치는 `resolution × scale`이며, MapGrid 기반 경로·목표 거리 critic은 `0.5 × resolution × scale`을 사용합니다. 최대 inflation 비용과 격자 거리의 평가 균형을 맞춰 합법적인 목표 접근이 정지보다 유리하도록 설정합니다. lethal/unknown 셀은 양수 가중치를 곱하기 전에 예외로 후보를 거부합니다. 이 조정의 영향은 통합 주행의 도착·통로·장애물 구간과 V4-03/V4-05로 검증합니다. [Nav2 1.3.13 footprint 검사](https://github.com/ros-navigation/navigation2/blob/1.3.13/nav2_dwb_controller/dwb_critics/src/obstacle_footprint.cpp), [critic 비용 합산](https://github.com/ros-navigation/navigation2/blob/1.3.13/nav2_dwb_controller/dwb_core/src/dwb_local_planner.cpp)
 
@@ -463,7 +463,7 @@ I14에서 검증기가 simulator를 별도 소유하고 navigation launch는 `st
 | V4-01 | 올바른 installed plugin, diff/0.05 m/16 heading, 공식 자산 hash 일치 | manifest·파라미터 dump·plugin 로드 로그 |
 | V4-02 | 모든 성공 목표의 truth 기준 위치 ≤0.15 m, yaw ≤0.20 rad | 목표 UUID·최종 map pose·고정 정합 truth·오차 |
 | V4-03 | 접촉 0회, 기록된 경로와 실제 차체의 충돌 0 | world obstacle geometry와 swept footprint 검사, contact 정보 사용 가능 시 함께 기록 |
-| V4-04 | 각 단계의 선속도·각속도 한도 및 미지원 축 0, 최종 Gazebo 출력의 바퀴별 명령 ≤ 실행 중인 베이스의 상한(기본 35 RPM) | DWB 원본부터 `/sim/cmd_vel`까지 6개 토픽, 실행 중인 좌우 반경·윤거·RPM 파라미터 |
+| V4-04 | 각 단계의 선속도·각속도 한도 및 미지원 축 0, 최종 Gazebo 출력의 바퀴별 명령 ≤ 실행 중인 베이스의 상한(기본 42 RPM) | DWB 원본부터 `/sim/cmd_vel`까지 6개 토픽, 실행 중인 좌우 반경·윤거·RPM 파라미터 |
 | V4-05 | 0.80 m 통로 실제 통과, 차체 모서리 충돌 경로/후보 거부 | 통로 내부 trajectory, planner/DWB fixture 및 실행 근거 |
 | V4-06 | cancel 후 신규 nonzero 생성 중단, 1.0 s 안에 측정 정지, 새 UUID로 재출발 | action terminal state·final zero·측정 속도 |
 | V4-07 | 닫힌 gate 반영 후 30 s 이내 ABORTED, 무한 recovery 없음 | 비용지도 반영 시각·BT 상태·action 결과 |

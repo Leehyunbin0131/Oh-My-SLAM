@@ -73,7 +73,7 @@ flowchart LR
 - P1과 같은 명령 수명·속도 상한을 적용하고 최하단에서만 Gazebo용 메시지로 변환합니다.
 - Gazebo의 wheel odom을 `/wheel/odometry`로 연결합니다. EKF를 켜면 Gazebo odom TF는 끕니다.
 - 가상 라이다·IMU·RGB-D의 frame·stamp·QoS, `use_sim_time`을 통일합니다. 별도 truth 토픽은 검증 도구만 구독합니다.
-- 시뮬레이션은 바퀴별 35 RPM을 사용합니다. 실물 운용 상한은 95 RPM으로 유지하며 MCU 보호 상한 100 RPM과 구분합니다.
+- 시뮬레이션은 바퀴별 42 RPM을 사용합니다. 실물 운용 상한은 95 RPM으로 유지하며 MCU 보호 상한 100 RPM과 구분합니다.
 
 **산출물:** `sim.launch.py`, 기본 robot profile, 센서 bridge 설정, RViz 설정.
 
