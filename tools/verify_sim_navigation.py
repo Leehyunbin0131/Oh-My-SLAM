@@ -1098,7 +1098,8 @@ class NavigationRun:
                 self.wait_sim(1.)
                 surveyed = True
             if surveyed:
-                self.goto([5,4,0], 'I6_return_before_gate')
+                self.e.detail('I6.survey_before_gate', self.map_pose()[0] < 6.,
+                              pose=self.map_pose().tolist(), goal_observed=self.grid_free([9,4,0]))
             self.stage='I6';path_count=len(self.paths);self.send_goal([9,4,0],'I6')
             def fresh_path():
                 if self.current_future.done():raise AssertionError('Gate preparation goal terminated before a valid path')
