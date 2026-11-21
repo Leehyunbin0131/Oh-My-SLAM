@@ -368,7 +368,7 @@ class NavigationRun:
             Odometry, '/odom', lambda msg: self.stop_samples.append((time.monotonic(), msg)),
             QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.odom_node.create_subscription(
-            Odometry, '/sim/ground_truth', self.braking_truth.append,
+            Odometry, '/sim/ground_truth', lambda msg: self.braking_truth.append(msg),
             QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT))
         def observe_drive_clock(message):
             self.drive_clock = (stamp_s(message.clock), time.monotonic())
