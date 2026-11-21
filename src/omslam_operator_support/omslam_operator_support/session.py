@@ -27,7 +27,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid
-from std_srvs.srv import Trigger
+from std_srvs.srv import Empty, Trigger
 from omslam_operator_msgs.msg import KeepoutZones, OperatorState
 from omslam_operator_msgs.srv import Control, MapCommand
 
@@ -211,6 +211,7 @@ class MapSupport(Node):
                                                 callback_group=group)
         self.stop_client = self.create_client(Trigger, '/operator/stop', callback_group=group)
         self.control = self.create_client(Control, '/operator/control', callback_group=group)
+        self.nomotion_client = self.create_client(Empty, '/request_nomotion_update', callback_group=group)
         self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 1)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.receive_amcl, 1,
                                  callback_group=group)
@@ -226,6 +227,8 @@ class MapSupport(Node):
 
     def wait_initial_pose(self, session, stamp, sent):
         deadline = sent + 8.
+        next_update = sent + .5
+        update = None
         while time.monotonic() < deadline:
             observed, received = self.amcl_estimate
             state = self.state
@@ -233,6 +236,14 @@ class MapSupport(Node):
                     and state.stopped and not state.base_active and time.monotonic()-self.state_at < .6
                     and observed >= stamp and received >= sent):
                 return
+            # A stationary AMCL may use a buffered scan for its first pose
+            # then skip further updates until the next movement. Request a new
+            # scan estimate while keeping the original pose and timestamp test.
+            if (state and state.session_id == session and state.stopped and not state.base_active
+                    and time.monotonic() >= next_update and (update is None or update.done())
+                    and self.nomotion_client.service_is_ready()):
+                update = self.nomotion_client.call_async(Empty.Request())
+                next_update = time.monotonic() + 1.
             time.sleep(.05)
         raise RuntimeError('초기 위치를 보냈지만 현재 지도에서 AMCL 위치 관측을 확인하지 못했습니다.')
 

@@ -2,6 +2,7 @@
 from contextlib import nullcontext
 from pathlib import Path
 import threading
+import time
 from types import SimpleNamespace
 import pytest
 from omslam_operator_msgs.srv import MapCommand
@@ -189,3 +190,22 @@ def test_initialpose_holds_map_lease_until_current_estimate_and_teardown_retires
     context.start_navigation = start
     result = context.command(MapCommand.Request(operation='slam'), MapCommand.Response())
     assert result.success, result.message
+
+def test_stationary_amcl_requires_measurement_after_requested_pose(monkeypatch):
+    now = [20.]
+    monkeypatch.setattr(time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(time, 'sleep', lambda amount: now.__setitem__(0, now[0] + amount))
+    state = SimpleNamespace(session_id='new', localization_initialized=True,
+                            stopped=True, base_active=False)
+    support = SimpleNamespace(state=state, state_at=20., amcl_estimate=(99, 20.1))
+    updates = []
+
+    def request_update(request):
+        updates.append(request)
+        support.amcl_estimate = (102, now[0])
+        support.state_at = now[0]
+        return SimpleNamespace(done=lambda: True)
+
+    support.nomotion_client = SimpleNamespace(service_is_ready=lambda: True, call_async=request_update)
+    MapSupport.wait_initial_pose(support, 'new', 100, 20.)
+    assert len(updates) == 1
