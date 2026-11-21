@@ -363,9 +363,13 @@ class NavigationRun:
             qos=transient if topic in transient_topics else qos_profile_sensor_data
             self.node.create_subscription(cls,topic,partial(self.receive,topic),qos)
         self.stop_samples = deque(maxlen=150)
+        self.braking_truth = deque(maxlen=150)
         self.odom_node.create_subscription(
             Odometry, '/odom', lambda msg: self.stop_samples.append((time.monotonic(), msg)),
             QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.odom_node.create_subscription(
+            Odometry, '/sim/ground_truth', self.braking_truth.append,
+            QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT))
         def observe_drive_clock(message):
             self.drive_clock = (stamp_s(message.clock), time.monotonic())
         self.odom_node.create_subscription(
@@ -882,23 +886,33 @@ class NavigationRun:
             self.send_goal([2., 0., 0.], label)
             target_speed = rpm * radius * math.tau / 60.
             minimum_fraction = .985 if rpm == cap else .94
-            self.until(lambda: minimum_fraction * target_speed < self.trajectory[-1]['velocity'][0] < 1.05 * target_speed,
-                       25., 'reach measured speed for ' + label)
+            def at_speed():
+                if not self.braking_truth:
+                    return False
+                sample = self.braking_truth[-1]
+                return (abs(self.drive_clock[0] - stamp_s(sample.header.stamp)) <= .04
+                        and minimum_fraction * target_speed < sample.twist.twist.linear.x < 1.05 * target_speed)
+            self.until(at_speed, 25., 'reach measured speed for ' + label)
             entry = self.cancel()
             start = entry['cancel_request_stamp']
-            initial = min(self.trajectory, key=lambda row: abs(row['stamp'] - start))
-            initial_speed = initial['velocity'][0]
             stop = self.metrics['stops'][-1]
-            final = min(self.trajectory, key=lambda row: abs(row['stamp'] - stop['settled_time']))
+            truth = self.braking_truth.copy()
+            initial = min(truth, key=lambda sample: abs(stamp_s(sample.header.stamp) - start))
+            final = min(truth, key=lambda sample: abs(stamp_s(sample.header.stamp) - stop['settled_time']))
+            initial_speed = initial.twist.twist.linear.x
+            initial_stamp, final_stamp = stamp_s(initial.header.stamp), stamp_s(final.header.stamp)
+            observed = abs(initial_stamp-start) <= .04 and abs(final_stamp-stop['settled_time']) <= .04
+            before, after = initial.pose.pose.position, final.pose.pose.position
             zero = next((row['drive_clock'] for row in self.command_events
                          if row['topic'] == '/sim/cmd_vel' and not any(row['velocity'])
                          and row['wall_time'] >= entry['cancel_request_wall']), None)
-            self.e.check(label, zero is not None and stop['duration_s'] <= 1., requested_rpm=rpm,
+            self.e.check(label, observed and minimum_fraction * target_speed <= initial_speed <= 1.05 * target_speed
+                         and zero is not None and stop['duration_s'] <= 1., requested_rpm=rpm,
                          configured_cap_rpm=cap, speed_limit_percent=limit.speed_limit, initial_vx=initial_speed,
                          cancel_request=start, first_zero_received=zero,
                          first_stopped=stop['first_stop_stamp_ns'] * 1e-9, confirmed=stop['settled_time'],
-                         duration_s=stop['duration_s'], distance_m=math.dist(initial['world'][:2], final['world'][:2]),
-                         truth_start_stamp=initial['stamp'], truth_stop_stamp=final['stamp'])
+                         duration_s=stop['duration_s'], distance_m=math.hypot(after.x-before.x, after.y-before.y),
+                         truth_start_stamp=initial_stamp, truth_stop_stamp=final_stamp)
         limit.speed_limit = 100.
         limit.header.stamp = self.node.get_clock().now().to_msg()
         publisher.publish(limit)
