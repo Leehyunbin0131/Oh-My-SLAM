@@ -174,6 +174,7 @@ class NavigationRun:
         self.depth_record_stages={'I4','I7','I9','I10'}
         self.tf_failures=[];self.clock_reset=False;self.last_sensor_stamps={};self.stopping=False
         self.depth_pending=deque(maxlen=5);self.depth_evidence=[]
+        self.cloud_pending = deque()
         self.tf_observations=[];self.odom_observations=[];self.bt_events=[];self.object_intervals=[]
         self.map_events=[];self.graph_before=None
         self.object_positions=[]
@@ -218,6 +219,7 @@ class NavigationRun:
                 if label not in self.allowed_exit and proc.poll() is not None:raise RuntimeError(f'{label} exited unexpectedly: {proc.returncode}')
             self.executor.spin_once(timeout_sec=min(.01,max(0,end-time.monotonic())))
             self.process_depth_evidence()
+            self.process_cloud_evidence()
             self.process_costmap_snapshots()
             if self.safety_violation and not self.stopping:
                 self.stopping=True
@@ -274,7 +276,7 @@ class NavigationRun:
                 'frame':msg.header.frame_id if hasattr(msg,'header') else None,
                 'velocity':[twist.linear.x,twist.linear.y,twist.linear.z,twist.angular.x,twist.angular.y,twist.angular.z]})
         if topic=='/perception/memory':self.observe_memory(msg)
-        if topic=='/perception/obstacles':self.observe_cloud(msg)
+        if topic=='/perception/obstacles':self.cloud_pending.append((self.now(), msg))
         if topic.endswith('/costmap_raw'):self.observe_costmap(topic,msg)
         if topic=='/plan' and msg.poses:self.observe_plan(msg)
         if topic=='/map':
@@ -537,7 +539,7 @@ class NavigationRun:
                     if qos_check_compatible(p.qos_profile,s.qos_profile)[0]==QoSCompatibility.ERROR:
                         incompat.append([topic,p.node_name,s.node_name])
         self.e.detail('I0.qos_and_command_ownership',not incompat and endpoints['/cmd_vel']['publishers']==['navigation_guard']
-                      and endpoints['/sim/ground_truth']['subscribers']==[self.node.get_name()],endpoints=endpoints,incompatible=incompat)
+                      and sorted(endpoints['/sim/ground_truth']['subscribers']) == sorted([self.node.get_name(), self.odom_node.get_name()]),endpoints=endpoints,incompatible=incompat)
         self.authority('slam_toolbox' if self.mode=='slam' else 'amcl')
         names=('omslam_navigation','omslam_navigation_contracts','nav2_smac_planner','omslam_sim','omslam_description','omslam_base',
                'omslam_localization','omslam_mapping','omm_perception','omm_perception_msgs','omm_costmap_layers')
@@ -626,13 +628,20 @@ class NavigationRun:
         return values[(np.linalg.norm(values[:,:2]-target,axis=1)<.28)
                       &(values[:,2]>.015)&(values[:,2]<.25)]
 
-    def observe_cloud(self,msg):
+    def process_cloud_evidence(self):
+        if not self.cloud_pending:
+            return
+        received, msg = self.cloud_pending[0]
+        stamp = stamp_s(msg.header.stamp)
         try:
-            points=self.observation_points(msg)
-            record={**self.now(),'stamp':stamp_s(msg.header.stamp),'points':len(points),
-                    'low_a':self.points_near(points,'low_a'),'low_b':self.points_near(points,'low_b')}
+            points = self.observation_points(msg)
+            record = dict(received, stamp=stamp, points=len(points),
+                          low_a=self.points_near(points, 'low_a'), low_b=self.points_near(points, 'low_b'))
         except Exception as exc:
-            record={**self.now(),'stamp':stamp_s(msg.header.stamp),'tf_error':str(exc)}
+            if self.sim_time - stamp < 2. and len(self.cloud_pending) < 40:
+                return
+            record = dict(received, stamp=stamp, tf_error=str(exc))
+        self.cloud_pending.popleft()
         self.cloud_events.append(record)
 
     def observe_memory(self,msg):
@@ -1419,7 +1428,7 @@ class NavigationRun:
                                   ('object_positions.json',self.object_positions),('object_intervals.json',self.object_intervals),
                                   ('dwb_evaluations.json',self.dwb_evaluations),
                                   ('failure_costmaps.json',self.costmap_snapshots),
-                                  ('depth_target_evidence.json',self.depth_evidence),('command_observations.json',self.command_events),('tf_observations.json',self.tf_observations),('odom_observations.json',self.odom_observations),('bt_events.json',self.bt_events),('guard_states.json',self.states),('sensor_observations.json',self.sensor_observations)]:
+                                  ('cloud_observations.json',self.cloud_events),('depth_target_evidence.json',self.depth_evidence),('command_observations.json',self.command_events),('tf_observations.json',self.tf_observations),('odom_observations.json',self.odom_observations),('bt_events.json',self.bt_events),('guard_states.json',self.states),('sensor_observations.json',self.sensor_observations)]:
             (self.e.directory/filename).write_text(json.dumps(contents,indent=2,default=jsonable)+'\n')
         self.e.data.update(sample_counts=dict(self.counts),sim_duration_s=self.sim_time,wall_duration_s=time.monotonic()-self.start_wall,
                            final_guard_state=self.guard_state,actual_movement=any(abs(p['velocity'][0])>.01 or abs(p['velocity'][1])>.02 for p in self.trajectory))

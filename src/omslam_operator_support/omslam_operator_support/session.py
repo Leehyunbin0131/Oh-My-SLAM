@@ -564,8 +564,7 @@ def main(argv=None):
                 f'world:={args.world}', f'gui:={str(args.gazebo_gui).lower()}',
                 'pedestrians:=false'])
             node.start_navigation()
-        processes.start('system_monitor', ['ros2', 'run', 'omslam_system_monitor', 'system_monitor',
-                                          '--ros-args', '-p',
+        processes.start('system_monitor', ['ros2', 'launch', 'omslam_system_monitor', 'system_monitor.launch.py',
                                           'host_role:=' + ('simulation_host' if args.start_sim else 'operator_pc')])
         if not args.no_gui:
             gui = processes.start('gui', [sys.executable, '-m', 'omslam_operator.app',
