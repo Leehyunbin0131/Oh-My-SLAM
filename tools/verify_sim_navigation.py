@@ -347,6 +347,9 @@ class NavigationRun:
             type_name=cls.__module__.split('.')[0]+'/msg/'+cls.__name__
             self.writer.create_topic(rosbag2_py.TopicMetadata(id=topic_id,name=topic,type=type_name,serialization_format='cdr'))
             qos=transient if topic in transient_topics else qos_profile_sensor_data
+            if topic == '/odom':
+                # Preserve the 50 Hz measurement window while camera/rosbag callbacks run.
+                qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT)
             self.node.create_subscription(cls,topic,partial(self.receive,topic),qos)
         self.enable_client=self.node.create_client(SetBool,'/navigation/enable')
         self.fault_clients={k:self.node.create_client(SetBool,'/simulation/fault/'+k) for k in ('scan','depth')}
@@ -420,10 +423,13 @@ class NavigationRun:
                 if wall > last_receipt:
                     window.observe(msg, wall)
                     last_receipt = wall
-            if window.confirmed(round(self.sim_time * 1e9), time.monotonic()):
-                if (window.last_ns - window.after_ns) * 1e-9 <= timeout:
-                    return window
-            if self.sim_time - start > timeout or time.monotonic() > deadline:
+                    if (window.last_ns - window.after_ns <= round(timeout * 1e9)
+                            and window.confirmed(round(self.sim_time * 1e9), time.monotonic())):
+                        return window
+            # DDS can deliver an on-time odometry sample after the clock advances.
+            # Only stamps within the original window can qualify above.
+            if (window.last_ns - window.after_ns > round(timeout * 1e9)
+                    or self.sim_time - start > timeout + .25 or time.monotonic() > deadline):
                 raise AssertionError(f'{label}: no fresh measured stop within {timeout:g} seconds')
             self.pump()
 
@@ -799,6 +805,7 @@ class NavigationRun:
 
     def cancel(self):
         start=self.sim_time;handle=self.current_goal
+        self.event('cancel_request', uuid=self.current_entry['id'])
         future=handle.cancel_goal_async();self.until(future.done,5,'cancel response')
         response=future.result();self.event('cancel_response',goals_canceling=len(response.goals_canceling))
         self.e.detail('cancel_accepted',bool(response.goals_canceling))

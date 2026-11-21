@@ -177,6 +177,8 @@ def test_serial_worker_invalidates_delayed_arm_and_latches_idle_fault(monkeypatc
                 assert 'MCU fault 2' in node.error and not node.active
                 messages = []
                 node.last_diag = 0.
+                node.last_diag_error = None
+                node.fault_deactivate_pending = False
                 node.last_motor_publish = time.monotonic()
                 node.odom_pub = node.joint_pub = SimpleNamespace(publish=lambda msg: None)
                 node.diag_pub = SimpleNamespace(publish=messages.append)

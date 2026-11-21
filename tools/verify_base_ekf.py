@@ -425,10 +425,10 @@ class Runtime:
         self.fault_pub.publish(self.Bool(data=False))
         self.command()
         fault_stopped = self.safe_zero_for(.10)
-        self.transition(4)  # deactivate
+        self.until(lambda: self.state() == 'inactive', 2., 'automatic fault deactivation')
         self.transition(3, expected=False)
         self.result.check('motor_fault_latches_and_blocks_reactivation', fault_stopped and self.state() == 'inactive',
-                          transitions=self.transitions[-2:])
+                          transitions=self.transitions[-1:])
         self.transition(2)  # cleanup
         self.transition(1)  # configure reconnects mock transport
         self.pump(.15)
