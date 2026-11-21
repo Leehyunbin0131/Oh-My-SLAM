@@ -4,7 +4,7 @@
 
 `omslam_navigation`은 온라인 SLAM 또는 저장 지도에서 State Lattice 경로를 DWB로 추종합니다. 라이다와 RGB-D 장애물 기억을 비용지도에 반영하고, Collision Monitor와 navigation guard가 관측·명령·실행 상태에 따라 구동을 차단합니다. 이 실행 경로의 대상은 Gazebo 시뮬레이션입니다.
 
-시뮬레이션 최고 속도는 바퀴별 **100 RPM**, 직진 **0.712 m/s**이며 Nav2·velocity smoother·navigation guard에 같은 선속도 상한을 적용합니다. 회전 상한은 0.60 rad/s입니다. 아래 기존 주행 결과는 해당 시험 당시 설정의 근거이며, 최고 속도 변경 후 모든 장애물 코스를 다시 검증했다는 의미는 아닙니다.
+Gazebo 주행 상한은 바퀴별 **35 RPM**, 직진 **0.2492 m/s**, 회전 **0.50 rad/s**입니다. GUI 기본값은 17.5 RPM이며 1~35 RPM 범위에서 소수로 조정할 수 있습니다. 35 RPM 직진 중 Nav2 취소 시험에서 정지 상태를 0.30초 유지하기까지 0.832초가 걸렸고 6.3 cm 더 이동했습니다. 아래의 과거 시험은 각 실행 당시 설정으로 측정했습니다.
 
 ## 한 명령으로 실행
 
@@ -27,7 +27,7 @@ cd ~/MyRos/Oh_My_SLAM
 | --- | --- |
 | 전역 계획 | `nav2_smac_planner::SmacPlannerLattice`, diff·0.05 m·16 heading·112 primitives |
 | 지역 제어 | `dwb_core::DWBLocalPlanner`, 전진·제자리 회전, `ObstacleFootprint` 검사 |
-| 도착 판정 | `StoppedGoalChecker`, 위치 0.10 m·yaw 0.15 rad 이내와 측정 속도 0.01 m/s·0.02 rad/s 이하를 함께 확인 |
+| 도착 판정 | `StoppedGoalChecker`, 위치 0.08 m·yaw 0.15 rad 이내와 측정 속도 0.01 m/s·0.02 rad/s 이하를 함께 확인 |
 | 비용지도 | 전역 static→lidar→camera memory→inflation, 지역 lidar→camera memory→inflation |
 | 인지 | depth·CameraInfo·유효 IMU 자세로 바닥 분리, `odom` 기준 장애물 기억 |
 | 명령 | `/cmd_vel/nav`→guard→`/cmd_vel/requested`→smoother→`/cmd_vel/smoothed`→monitor→`/cmd_vel/monitored`→guard→`/cmd_vel`→sim base |
