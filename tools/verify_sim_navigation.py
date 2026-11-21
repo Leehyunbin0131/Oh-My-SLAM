@@ -1191,17 +1191,23 @@ class NavigationRun:
         self.until(lambda:self.object_memory('low_a')==0,10,'valid free-space deletion of A')
         cleared=next(e for e in self.memory_events[clear_begin:] if e['low_a']==0)
         self.metrics['memory']['A_clear']={'removed':removed,'cleared':cleared,'outside_frames':len(outside),'unobserved_frames':len(unobserved)}
+        # Reliable raw images and stamped memory snapshots use separate DDS
+        # queues. Wait for projection at the final observation stamp before
+        # deciding whether the recorded five-frame sequence exists.
+        self.until(lambda: self.depth_evidence and
+                   self.depth_evidence[-1]['stamp'] >= cleared['observation_stamp'] - 1e-6,
+                   10., 'depth projections through the memory clearing observation')
         consecutive=[];eligible=None;previous=None
         for e in self.depth_evidence:
             if e['stamp']<removed or e['stamp']>cleared['observation_stamp']+1e-6:continue
             if previous is not None and e['stamp']<=previous:continue
             gap=e['stamp']-previous if previous is not None else 0.;previous=e['stamp']
-            if gap>.3 or not e.get('low_a',{}).get('free',False):consecutive=[]
+            if gap>.15 or not e.get('low_a',{}).get('free',False):consecutive=[]
             if not e.get('low_a',{}).get('free',False):continue
             consecutive.append(e)
             if len(consecutive)>=5 and e['stamp']-consecutive[0]['stamp']>=.2:
                 eligible=consecutive[:5];break
-        deletion_delay=cleared['sim_time']-eligible[-1]['stamp'] if eligible else None
+        deletion_delay=cleared['stamp']-eligible[-1]['stamp'] if eligible else None
         self.e.check('V4-09',bool(outside) and all(e['low_a']>0 for e in outside) and bool(unobserved)
                      and all(e['low_a']>0 for e in unobserved) and eligible is not None
                      and deletion_delay is not None and 0<=deletion_delay<=1. and cleared['cleared']>before_clear,
