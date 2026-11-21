@@ -56,7 +56,7 @@ ApplicationWindow {
         LogsPage { objectName: "logsPage"; events: operatorModel.logEntries }
     }
     Rectangle {
-        visible: window.notification!==""; anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 20
+        visible: window.notification!==""; anchors.right: parent.right; anchors.rightMargin: 16; anchors.bottom: parent.bottom; anchors.bottomMargin: 76
         width: Math.min(720,messageText.implicitWidth+36); height: messageText.implicitHeight+24; radius: 8; color: "#EF29405C"; border.color: "#55799E"; z: 100
         Text { id: messageText; anchors.centerIn: parent; width: Math.min(684,implicitWidth); text: window.notification; color: "#E8EEF6"; font.pixelSize: 13; wrapMode: Text.Wrap }
     }

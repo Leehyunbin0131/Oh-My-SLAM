@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import threading
 import time
 import traceback
 import numpy as np
@@ -30,6 +31,12 @@ WORKSPACE=Path(__file__).resolve().parents[1]
 ALL_CHECKS=[f'V4-{n:02d}' for n in range(1,15)]
 FIVE_GOAL_CHECKS=['installed_readiness','five_consecutive_goals','arrival_accuracy',
                   'collision_free','command_limits','normal_shutdown']
+
+SCENARIO_CHECKS = {
+    'integrated': ALL_CHECKS,
+    'five-goals': FIVE_GOAL_CHECKS,
+    'cancel-and-turn': ['V4-01', 'maximum_speed_stop', 'low_speed_stop', 'left_turn', 'right_turn'],
+}
 
 
 def jsonable(value):
@@ -117,7 +124,7 @@ class Evidence:
         self.directory=Path(directory).resolve()
         if (self.directory/'results.json').exists(): raise FileExistsError('Prior results are immutable; choose a new output directory')
         self.directory.mkdir(parents=True,exist_ok=True);(self.directory/'logs').mkdir(exist_ok=True)
-        available=FIVE_GOAL_CHECKS if scenario=='five-goals' else ALL_CHECKS
+        available=SCENARIO_CHECKS[scenario]
         self.data={'scope':'Five consecutive simulation navigation goals' if scenario=='five-goals' else 'P4 simulation navigation',
                    'scenario':scenario,'status':'RUNNING','started_at':datetime.now().astimezone().isoformat(),
                    'requested_checks':checks,'checks':{k:{'status':'NOT_EXERCISED'} for k in available},'details':{}}
@@ -157,7 +164,7 @@ class NavigationRun:
         self.timing=defaultdict(list);self.tf_edges={};self.states=[];self.goals=[];self.paths=[];self.trajectory=[]
         self.memory_events=[];self.cloud_events=[];self.costmap_events=[];self.command_events=[];self.sensor_observations=[]
         self.ros_errors=[];self.stage='I0';self.mode='slam';self.world_to_map=None;self.initial_odom=None
-        self.odom_node=None;self.odom_executor=None
+        self.odom_node=None;self.odom_executor=None;self.odom_thread=None
         self.node=None;self.context=None;self.executor=None;self.writer=None;self.recorded_topics=set()
         self.sim_time=0.;self.last_truth=None;self.minimum_clearance=float('inf');self.collision=[];self.safety_violation=None
         self.active_objects={k:list(v['center']) for k,v in self.course['objects'].items() if v['initial']}
@@ -208,13 +215,6 @@ class NavigationRun:
             if self.sim_time>1500:raise TimeoutError('P4 simulated-time watchdog')
             for label,proc in self.processes.items():
                 if label not in self.allowed_exit and proc.poll() is not None:raise RuntimeError(f'{label} exited unexpectedly: {proc.returncode}')
-            # Drain the odometry reader separately so busy bag/image subscriptions
-            # cannot starve the independent physical-stop observer.
-            for _ in range(16):
-                observations = self.counts['/odom']
-                self.odom_executor.spin_once(timeout_sec=0.)
-                if self.counts['/odom'] == observations:
-                    break
             self.executor.spin_once(timeout_sec=min(.01,max(0,end-time.monotonic())))
             self.process_depth_evidence()
             self.process_costmap_snapshots()
@@ -334,7 +334,9 @@ class NavigationRun:
         self.odom_executor = SingleThreadedExecutor(context=self.context)
         self.odom_executor.add_node(self.odom_node)
         self.pump(.5)
-        self.e.detail('isolated_ros_graph',self.node.get_node_names()==[self.node.get_name()],nodes=self.node.get_node_names())
+        observers = sorted([self.node.get_name(), self.odom_node.get_name()])
+        nodes = sorted(self.node.get_node_names())
+        self.e.detail('isolated_ros_graph', nodes == observers, nodes=nodes)
         self.buffer=Buffer(node=self.node);self.listener=TransformListener(self.buffer,self.node)
         transient=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
         topics={'/clock':Clock,'/tf':TFMessage,'/tf_static':TFMessage,'/odom':Odometry,'/wheel/odometry':Odometry,
@@ -358,11 +360,13 @@ class NavigationRun:
             type_name=cls.__module__.split('.')[0]+'/msg/'+cls.__name__
             self.writer.create_topic(rosbag2_py.TopicMetadata(id=topic_id,name=topic,type=type_name,serialization_format='cdr'))
             qos=transient if topic in transient_topics else qos_profile_sensor_data
-            if topic == '/odom':
-                # Preserve the 50 Hz measurement window while camera/rosbag callbacks run.
-                qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT)
-            reader = self.odom_node if topic == '/odom' else self.node
-            reader.create_subscription(cls,topic,partial(self.receive,topic),qos)
+            self.node.create_subscription(cls,topic,partial(self.receive,topic),qos)
+        self.stop_samples = deque(maxlen=150)
+        self.odom_node.create_subscription(
+            Odometry, '/odom', lambda msg: self.stop_samples.append((time.monotonic(), msg)),
+            QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.odom_thread = threading.Thread(target=self.odom_executor.spin, name='stop-odometry', daemon=True)
+        self.odom_thread.start()
         self.enable_client=self.node.create_client(SetBool,'/navigation/enable')
         self.fault_clients={k:self.node.create_client(SetBool,'/simulation/fault/'+k) for k in ('scan','depth')}
         self.action=ActionClient(self.node,NavigateToPose,'/navigate_to_pose')
@@ -431,8 +435,12 @@ class NavigationRun:
         last_receipt = -math.inf
         deadline = time.monotonic() + max(6., timeout * 6.)
         while True:
-            for wall, msg in self.samples['/odom']:
+            # Take a coherent snapshot of the independent, continuously drained reader.
+            for wall, msg in self.stop_samples.copy():
                 if wall > last_receipt:
+                    if stamp_s(msg.header.stamp) > self.sim_time:
+                        # The odom executor can run before this process receives /clock.
+                        break
                     window.observe(msg, wall)
                     last_receipt = wall
                     if (window.last_ns - window.after_ns <= round(timeout * 1e9)
@@ -442,7 +450,10 @@ class NavigationRun:
             # Only stamps within the original window can qualify above.
             if (window.last_ns - window.after_ns > round(timeout * 1e9)
                     or self.sim_time - start > timeout + .25 or time.monotonic() > deadline):
-                raise AssertionError(f'{label}: no fresh measured stop within {timeout:g} seconds')
+                self.e.detail('missing_stop_' + label, False, trigger=start, sim_time=self.sim_time,
+                              received_samples=len(self.stop_samples), first_stop_ns=window.first_ns,
+                              latest_ns=window.last_ns, count=window.count,
+                              recent=[(stamp_s(m.header.stamp), m.twist.twist.linear.x) for _,m in list(self.stop_samples.copy())[-4:]])
             self.pump()
 
     def wait_stop(self, label, start=None):
@@ -458,8 +469,22 @@ class NavigationRun:
 
     def parameter(self,node,names):
         client=self.node.create_client(self.GetParameters,'/'+node+'/get_parameters')
-        reply=self.call(client,self.GetParameters.Request(names=names))
-        self.node.destroy_client(client)
+        try:
+            self.until(client.service_is_ready, 5., 'parameter service ' + node)
+            # Endpoint discovery can precede matching of the service reply reader.
+            # Retry only this idempotent startup read, using a separate future.
+            for attempt in range(3):
+                future = client.call_async(self.GetParameters.Request(names=names))
+                try:
+                    self.until(future.done, 3., 'parameter reply from ' + node)
+                    reply = future.result()
+                    break
+                except TimeoutError:
+                    client.remove_pending_request(future)
+                    if attempt == 2:
+                        raise
+        finally:
+            self.node.destroy_client(client)
         def convert(value):
             return {1:value.bool_value,2:value.integer_value,3:value.double_value,4:value.string_value,
                     5:list(value.byte_array_value),6:list(value.bool_array_value),7:list(value.integer_array_value),
@@ -826,6 +851,56 @@ class NavigationRun:
         late=late_cancel_commands(self.command_events,start,terminal)
         self.e.detail('cancel_no_late_nonzero',not late,late=late)
         return entry
+
+    def run_cancel_and_turn(self):
+        from nav2_msgs.msg import SpeedLimit
+        self.initialize()
+        cap = self.drive_geometry['max_rpm']
+        radius = min(self.drive_geometry['left_radius'], self.drive_geometry['right_radius'])
+        publisher = self.node.create_publisher(SpeedLimit, '/speed_limit', 10)
+        self.until(lambda: publisher.get_subscription_count() > 0, 5., 'speed limit subscriber')
+        for label, rpm in [('maximum_speed_stop', cap), ('low_speed_stop', 10.)]:
+            self.stage = label
+            limit = SpeedLimit(percentage=True, speed_limit=100. * rpm / cap)
+            limit.header.stamp = self.node.get_clock().now().to_msg()
+            publisher.publish(limit)
+            self.wait_sim(.25)
+            self.send_goal([2., 0., 0.], label)
+            target_speed = rpm * radius * math.tau / 60.
+            self.until(lambda: .94 * target_speed < self.trajectory[-1]['velocity'][0] < 1.05 * target_speed,
+                       25., 'reach measured speed for ' + label)
+            start = self.sim_time
+            position = self.pose().copy()
+            initial_speed = self.trajectory[-1]['velocity'][0]
+            self.cancel()
+            stop = self.metrics['stops'][-1]
+            zero = next((row['sim_time'] for row in self.command_events
+                         if row['topic'] == '/sim/cmd_vel' and not any(row['velocity'])
+                         and row['sim_time'] >= start), None)
+            self.e.check(label, zero is not None and stop['duration_s'] <= 1., requested_rpm=rpm,
+                         configured_cap_rpm=cap, speed_limit_percent=limit.speed_limit, initial_vx=initial_speed,
+                         cancel_request=start, first_zero_received=zero,
+                         first_stopped=stop['first_stop_stamp_ns'] * 1e-9, confirmed=stop['settled_time'],
+                         duration_s=stop['duration_s'], distance_m=math.dist(self.pose()[:2], position[:2]))
+        limit.speed_limit = 100.
+        limit.header.stamp = self.node.get_clock().now().to_msg()
+        publisher.publish(limit)
+        self.wait_sim(.3)
+        for label, sign in [('left_turn', 1), ('right_turn', -1)]:
+            self.stage = label
+            pose = self.map_pose()
+            initial_yaw = self.pose()[2]
+            self.send_goal([*pose[:2], pose[2] + sign * 1.2], label)
+            def first_command():
+                return next((row for row in self.command_events if row['stage'] == label
+                             and row['topic'] == '/cmd_vel/nav' and abs(row['velocity'][5]) > .005), None)
+            self.until(first_command, 8., 'first nonzero turn for ' + label)
+            angular = first_command()['velocity'][5]
+            self.wait_sim(.5)
+            delta = math.remainder(self.pose()[2] - initial_yaw, math.tau)
+            self.finish_goal()
+            self.e.check(label, angular * sign > 0 and delta * sign > 0,
+                         requested_yaw_delta=sign * 1.2, first_angular_command=angular, actual_yaw_delta=delta)
 
     def in_region(self,region,min_speed=.1):
         if self.current_future is not None and self.current_future.done():
@@ -1334,6 +1409,7 @@ class NavigationRun:
         self.stop_process('simulator')
         if self.writer is not None:self.writer=None
         if self.odom_executor is not None:self.odom_executor.shutdown()
+        if self.odom_thread is not None:self.odom_thread.join()
         if self.odom_node is not None:self.odom_node.destroy_node()
         if self.executor is not None:self.executor.shutdown()
         if self.node is not None:self.node.destroy_node()
@@ -1342,7 +1418,7 @@ class NavigationRun:
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--scenario',choices=['integrated','five-goals'],default='integrated')
+    parser.add_argument('--scenario',choices=SCENARIO_CHECKS,default='integrated')
     parser.add_argument('--output',required=True,type=Path)
     parser.add_argument('--checks')
     parser.add_argument('--baseline-results',type=Path)
@@ -1351,11 +1427,11 @@ def main():
     parser.add_argument('--timeout',type=float,default=2400)
     parser.add_argument('--domain',type=int,default=176)
     args=parser.parse_args()
-    available=FIVE_GOAL_CHECKS if args.scenario=='five-goals' else ALL_CHECKS
+    available=SCENARIO_CHECKS[args.scenario]
     checks=args.checks.split(',') if args.checks else available
     if set(checks)-set(available):parser.error('Unknown acceptance IDs')
-    if args.scenario=='five-goals' and (args.checks or args.baseline_results):
-        parser.error('The five-goal scenario completes all five goals in one execution without a baseline')
+    if args.scenario!='integrated' and (args.checks or args.baseline_results):
+        parser.error('This scenario exercises all its checks in one execution without a baseline')
     if set(checks)!=set(available) and not args.baseline_results:parser.error('Partial verification requires --baseline-results')
     os.environ['ROS_DOMAIN_ID']=str(args.domain);os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE']='LOCALHOST'
     os.environ.pop('ROS_STATIC_PEERS',None)
@@ -1366,6 +1442,8 @@ def main():
     run.validation = {}
     try:
         build = verified_build(run.build_manifest)
+        result.data['git_commit'] = subprocess.check_output(
+            ['git','rev-parse','HEAD'], cwd=WORKSPACE, text=True).strip()
         from ament_index_python.packages import get_package_prefix
         prefixes = {pkg: Path(get_package_prefix(pkg)).resolve() for pkg in build['packages']}
         mismatches = {pkg: str(path) for pkg, path in prefixes.items() if path != WORKSPACE/'install'/pkg}
@@ -1395,7 +1473,8 @@ def main():
            'scenario':args.scenario,'checks':checks,'baseline':str(args.baseline_results) if args.baseline_results else None}
     entries.append(entry);ledger.write_text(json.dumps(entries,indent=2)+'\n')
     try:
-        if args.scenario=='five-goals':run.run_five_goals()
+        if args.scenario=='cancel-and-turn':run.run_cancel_and_turn()
+        elif args.scenario=='five-goals':run.run_five_goals()
         else:run.run(checks)
     except Exception as exc:
         result.data['error']={'type':type(exc).__name__,'message':str(exc),'traceback':traceback.format_exc()}

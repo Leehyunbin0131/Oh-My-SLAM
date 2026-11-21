@@ -69,11 +69,15 @@ Item {
         if (index<0 || index>=goalCount || !editable) return
         editingGoal=-1; operatorModel.removeGoal(index); selectedGoal=Math.min(index,goalCount-1)
     }
-    function reorderGoal(from,to) {
+    function reorderGoal(from,to,restoreFocus) {
         to=Math.max(0,Math.min(goalCount-1,to))
         if (from===to || !editable) return
         editingGoal=-1; operatorModel.moveWaypoint(from,to); selectedGoal=to
         goalList.currentIndex=to; goalList.positionViewAtIndex(to,ListView.Contain)
+        if (restoreFocus) Qt.callLater(function() {
+            var item = goalList.itemAtIndex(to)
+            if (item) item.focusReorder()
+        })
     }
     function updateGoal(index,x,y,yaw) {
         if (index<0 || index>=goalCount || !editable || !isFinite(x) || !isFinite(y) || !isFinite(yaw)) return
@@ -132,12 +136,12 @@ Item {
         id:goalPanel;objectName:"goalPanel";x:16;y:16;width:260
         height:Math.min(directPad.y-28,page.goalCount?220+page.goalCount*50:282)
         color:"#E5101B28";border.color:"#554C657F";radius:10
-        MouseArea {anchors.fill:parent}
+        MouseArea {anchors.fill:parent;acceptedButtons:Qt.AllButtons;onWheel:function(wheel){wheel.accepted=true}}
         ColumnLayout {anchors.fill:parent;anchors.margins:14;spacing:10
             RowLayout {Layout.fillWidth:true;spacing:8
                 Text {text:"목적지";color:"#E8EEF6";font.pixelSize:16;font.weight:Font.DemiBold;Layout.fillWidth:true}
                 Text {text:page.goalCount?page.goalCount+"개":"";color:"#8DA5C0";font.pixelSize:12}
-                ActionButton {objectName:"addGoalButton";text:page.addingGoal?"취소":"+";compact:true;implicitWidth:page.addingGoal?54:34;kind:page.addingGoal?"primary":"secondary";Accessible.name:page.addingGoal?"목적지 추가 취소":"목적지 추가";ToolTip.visible:hovered;ToolTip.text:page.addingGoal?"추가 취소 (Esc 또는 우클릭)":"지도에 목적지 추가";enabled:page.editable&&Boolean(page.ui.mapReady);onClicked:page.beginAdd()}
+                ActionButton {objectName:"addGoalButton";text:page.addingGoal?"취소":"+";compact:true;implicitWidth:page.addingGoal?54:34;kind:page.addingGoal?"primary":"secondary";Accessible.name:page.addingGoal?"목적지 추가 취소":"목적지 추가";ToolTip.visible:hovered;ToolTip.text:page.addingGoal?"추가 취소 (Esc 또는 우클릭)":"지도에 목적지 추가";enabled:page.editable&&Boolean(page.ui.canSetInitialPose);onClicked:page.beginAdd()}
             }
             Item {Layout.fillWidth:true;Layout.fillHeight:true
                 Column {visible:page.goalCount===0;anchors.centerIn:parent;spacing:9
@@ -149,16 +153,17 @@ Item {
                     id:goalList;objectName:"goalList";visible:page.goalCount>0;anchors.fill:parent;clip:true;model:goalRows;spacing:0
                     ScrollBar.vertical:ScrollBar{}
                     delegate:Rectangle {
-                        id:row;required property int index;required property real gx;required property real gy;required property real heading
+                        id:row;function focusReorder(){ reorderHandle.forceActiveFocus() }
+                        required property int index;required property real gx;required property real gy;required property real heading
                         objectName:"goalRow"+index;width:goalList.width;height:50;radius:6
                         color:page.activeGoal===index?"#503A7B6C":page.selectedGoal===index?"#4338587D":"transparent"
                         RowLayout {anchors.fill:parent;spacing:5
-                            Item {objectName:"reorderHandle"+row.index;Layout.preferredWidth:22;Layout.fillHeight:true;activeFocusOnTab:true
+                            Item {id:reorderHandle;objectName:"reorderHandle"+row.index;Layout.preferredWidth:22;Layout.fillHeight:true;activeFocusOnTab:true
                                 Accessible.role:Accessible.Button;enabled:page.editable;Accessible.name:"목적지 "+(row.index+1)+" 순서 변경. 위아래로 끌거나 방향키를 누르세요."
                                 Canvas {anchors.centerIn:parent;width:12;height:18;onPaint:{var c=getContext("2d");c.reset();c.fillStyle="#7E9ABC";for(var x=0;x<2;x++)for(var y=0;y<3;y++){c.beginPath();c.arc(3+x*6,3+y*6,1.2,0,7);c.fill();}}}
                                 Rectangle {anchors.fill:parent;radius:4;color:"transparent";border.color:parent.activeFocus?"#8DBBFF":"transparent"}
-                                Keys.onUpPressed:page.reorderGoal(row.index,row.index-1)
-                                Keys.onDownPressed:page.reorderGoal(row.index,row.index+1)
+                                Keys.onUpPressed:page.reorderGoal(row.index,row.index-1,true)
+                                Keys.onDownPressed:page.reorderGoal(row.index,row.index+1,true)
                                 MouseArea {anchors.fill:parent;preventStealing:true;cursorShape:pressed?Qt.ClosedHandCursor:Qt.OpenHandCursor;property real startY
                                     onPressed:function(mouse){startY=mouse.y;parent.forceActiveFocus()}
                                     onReleased:function(mouse){page.reorderGoal(row.index,row.index+Math.round((mouse.y-startY)/50))}
@@ -169,7 +174,7 @@ Item {
                                 background:Rectangle {radius:4;color:parent.hovered?"#253D58":"transparent";border.color:parent.activeFocus?"#8DBBFF":"transparent"}
                                 contentItem:Column {spacing:2
                                     Text {text:row.gx.toFixed(2)+", "+row.gy.toFixed(2)+" m";color:"#D9E6F6";font.pixelSize:12}
-                                    Text {text:"도착 방향 "+row.heading.toFixed(0)+"°";color:"#8FA8C4";font.pixelSize:10}
+                                    Text {text:"도착 방향 "+row.heading.toFixed(0)+"° · "+row.status;color:"#8FA8C4";font.pixelSize:10}
                                 }
                                 onClicked:page.editGoal(row.index)
                             }
@@ -203,7 +208,7 @@ Item {
             ActionButton {objectName:"moveButton";text:page.moving?"이동 중":"이동";iconName:"play";kind:"primary";Layout.fillWidth:true;implicitHeight:40;enabled:page.goalCount>0&&!page.addingGoal&&!page.addingKeepout&&page.editable&&Boolean(page.ui.mapReady)&&!page.ui.needsInitialPose;onClicked:page.startRoute()}
         }
     }
-    DirectPad {id:directPad;x:16;width:260;height:130;anchors.bottom:telemetry.top;anchors.bottomMargin:14;linearLimit:Number(page.ui.linearLimit||0);angularLimit:Number(page.ui.angularLimit||0);reverseAllowed:Boolean(page.ui.reverseAllowed);enabled:!page.ui.readOnly&&!page.ui.ownerBusy&&Boolean(page.ui.controlFresh);onCommand:function(v,w,active){page.manualCommand(v,w,active)}}
+    DirectPad {id:directPad;x:16;width:260;height:130;anchors.bottom:telemetry.top;anchors.bottomMargin:14;linearLimit:Number(page.ui.linearLimit||0);angularLimit:Number(page.ui.angularLimit||0);reverseAllowed:Boolean(page.ui.reverseAllowed);enabled:!page.ui.readOnly&&!page.ui.ownerBusy&&Boolean(page.ui.controlFresh);onCommand:function(v,w,active){page.manualCommand(v,w,active)};onReverseDenied:page.notify("현재 운용 설정에서는 후진할 수 없습니다")}
     Rectangle {anchors.top:parent.top;anchors.topMargin:16;anchors.horizontalCenter:parent.horizontalCenter;implicitWidth:motionRow.implicitWidth+32;implicitHeight:50;radius:9;color:"#D8101B28";border.color:"#554C657F"
         MouseArea {anchors.fill:parent;acceptedButtons:Qt.AllButtons;onWheel:function(wheel){wheel.accepted=true}}
         RowLayout {id:motionRow;anchors.centerIn:parent;spacing:18
@@ -223,7 +228,7 @@ Item {
     TelemetryHud {id:telemetry;objectName:"telemetryHud";anchors.left:parent.left;anchors.right:parent.right;anchors.bottom:parent.bottom;anchors.margins:16;height:implicitHeight}
 
     Rectangle {visible:page.editingGoal>=0;objectName:"coordinateEditor";x:goalPanel.x+goalPanel.width+12;y:goalPanel.y+48;width:300;height:145;radius:9;color:"#F0192B3F";border.color:"#6C90B4";z:20
-        MouseArea {anchors.fill:parent}
+        MouseArea {anchors.fill:parent;acceptedButtons:Qt.AllButtons;onWheel:function(wheel){wheel.accepted=true}}
         ColumnLayout {anchors.fill:parent;anchors.margins:14;spacing:9
             RowLayout {Layout.fillWidth:true;Text {text:"목적지 "+(page.editingGoal+1)+" 좌표";color:"#E8EEF6";font.pixelSize:13;Layout.fillWidth:true}ActionButton {text:"닫기";compact:true;kind:"ghost";onClicked:page.editingGoal=-1}}
             RowLayout {spacing:7;Layout.fillWidth:true
@@ -239,7 +244,7 @@ Item {
             ActionButton {objectName:"mapSaveButton";text:"지도 저장";kind:"ghost";compact:true;Layout.fillWidth:true;enabled:page.editable&&Boolean(page.ui.mapReady);onClicked:{mapTools.close();page.openMapPath("save")}}
             ActionButton {objectName:"mapLoadButton";text:"저장 지도 열기";kind:"ghost";compact:true;Layout.fillWidth:true;enabled:page.editable;onClicked:{mapTools.close();page.openMapPath("load")}}
             ActionButton {objectName:"newMapButton";text:"새 지도 작성";kind:"ghost";compact:true;Layout.fillWidth:true;enabled:page.editable;onClicked:{mapTools.close();page.releaseManual();operatorModel.newMap()}}
-            ActionButton {objectName:"initialPoseButton";text:"현재 위치 맞추기";kind:"ghost";compact:true;Layout.fillWidth:true;enabled:page.editable&&Boolean(page.ui.mapReady);onClicked:{mapTools.close();page.releaseManual();page.stopInput();page.initialPosePending=true;map.followRobot(false);page.forceActiveFocus()}}
+            ActionButton {objectName:"initialPoseButton";text:"현재 위치 맞추기";kind:"ghost";compact:true;Layout.fillWidth:true;enabled:page.editable&&Boolean(page.ui.canSetInitialPose);onClicked:{mapTools.close();page.releaseManual();page.stopInput();page.initialPosePending=true;map.followRobot(false);page.forceActiveFocus()}}
             Rectangle {height:1;Layout.fillWidth:true;color:"#3C526E"}
             CheckBox {text:"라이다";checked:map.layerScan;onToggled:map.layerScan=checked;implicitHeight:30}
             CheckBox {text:"장애물 기억";checked:map.layerMemory;onToggled:map.layerMemory=checked;implicitHeight:30}
@@ -284,17 +289,17 @@ Item {
             anchors.fill: parent; spacing: 12
             Text { text: page.mapPathOperation==="save"?"현재 지도 저장":"저장 지도 열기"; color: "#E8EEF6"; font.pixelSize: 17 }
             Text { text: page.mapPathOperation==="save"?"저장할 지도 경로를 입력하세요. 확장자는 자동으로 붙습니다.":"저장된 지도의 .yaml 파일 경로를 입력하세요."; color: "#9AAAC0"; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Field { id: mapPath; objectName: "mapPathInput"; Layout.fillWidth: true; placeholderText: page.mapPathOperation==="save"?"/경로/지도이름":"/경로/지도이름.yaml"; selectByMouse: true }
+            Field { id: mapPath; objectName: "mapPathInput"; Layout.fillWidth: true; placeholderText: page.mapPathOperation==="save"?"/경로/지도이름":"/경로/지도이름.yaml"; selectByMouse: true; onAccepted: if (pathSubmit.enabled) pathSubmit.clicked() }
             Item { Layout.fillHeight: true }
             RowLayout {
                 Layout.alignment: Qt.AlignRight; spacing: 8
                 ActionButton { objectName: "cancelMapPathButton"; text: "취소"; onClicked: mapPathDialog.close() }
-                ActionButton { objectName: "mapPathSubmit"; text: page.mapPathOperation==="save"?"저장":"열기"; kind: "primary"; enabled: mapPath.text.trim()!==""; onClicked: { if(page.mapPathOperation==="save")operatorModel.saveMap(mapPath.text.trim());else operatorModel.loadMap(mapPath.text.trim());mapPathDialog.close() } }
+                ActionButton { id: pathSubmit; objectName: "mapPathSubmit"; text: page.mapPathOperation==="save"?"저장":"열기"; kind: "primary"; enabled: mapPath.text.trim()!==""; onClicked: { if(page.mapPathOperation==="save")operatorModel.saveMap(mapPath.text.trim());else operatorModel.loadMap(mapPath.text.trim());mapPathDialog.close() } }
             }
         }
     }
     Item {anchors.fill:parent;visible:page.cameraKind!=="";z:60
-        MouseArea {anchors.fill:parent;onClicked:function(mouse){if(mouse.x<largeCamera.x||mouse.x>largeCamera.x+largeCamera.width||mouse.y<largeCamera.y||mouse.y>largeCamera.y+largeCamera.height)page.cameraKind=""}}
+        MouseArea {anchors.fill:parent;acceptedButtons:Qt.AllButtons;onWheel:function(wheel){wheel.accepted=true};onClicked:function(mouse){if(mouse.x<largeCamera.x||mouse.x>largeCamera.x+largeCamera.width||mouse.y<largeCamera.y||mouse.y>largeCamera.y+largeCamera.height)page.cameraKind=""}}
         Rectangle {id:largeCamera;objectName:"expandedCamera";anchors.centerIn:parent;width:Math.min(780,parent.width-80);height:Math.min(520,parent.height-60);radius:10;color:"#F0101B28";border.color:"#567492"
             ColumnLayout {anchors.fill:parent;anchors.margins:16;spacing:12
                 RowLayout {Layout.fillWidth:true;Text {text:page.cameraKind==="depth"?"깊이 영상":"전방 RGB";color:"#E8EEF6";font.pixelSize:17;Layout.fillWidth:true}ActionButton {objectName:"closeCameraButton";text:"닫기";compact:true;onClicked:page.cameraKind=""}}

@@ -17,7 +17,11 @@ Item {
         no_path: "목적지까지 경로가 없습니다 · 목적지를 바꿔보세요",
         blocked: "이동할 수 없습니다 · 시스템 로그를 확인하세요"
     })
-    readonly property string message: messages[stateCode] || messages.checking
+    readonly property string message: {
+        var label = messages[stateCode] || messages.checking
+        var cause = reason || detail
+        return (stateCode === "blocked" || stateCode === "no_path") && cause ? label + " · " + cause : label
+    }
     readonly property color statusColor: stateCode === "ready" ? "#63CFB1"
         : stateCode === "disconnected" || stateCode === "blocked" ? "#E98087"
         : stateCode === "checking" || !messages[stateCode] ? "#9AAAC0" : "#DDB56B"
