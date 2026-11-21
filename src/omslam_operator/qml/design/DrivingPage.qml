@@ -141,7 +141,7 @@ Item {
             RowLayout {Layout.fillWidth:true;spacing:8
                 Text {text:"목적지";color:"#E8EEF6";font.pixelSize:16;font.weight:Font.DemiBold;Layout.fillWidth:true}
                 Text {text:page.goalCount?page.goalCount+"개":"";color:"#8DA5C0";font.pixelSize:12}
-                ActionButton {objectName:"addGoalButton";text:page.addingGoal?"취소":"+";compact:true;implicitWidth:page.addingGoal?54:34;kind:page.addingGoal?"primary":"secondary";Accessible.name:page.addingGoal?"목적지 추가 취소":"목적지 추가";ToolTip.visible:hovered;ToolTip.text:page.addingGoal?"추가 취소 (Esc 또는 우클릭)":"지도에 목적지 추가";enabled:page.editable&&Boolean(page.ui.canSetInitialPose);onClicked:page.beginAdd()}
+                ActionButton {objectName:"addGoalButton";text:page.addingGoal?"취소":"+";compact:true;implicitWidth:page.addingGoal?54:34;kind:page.addingGoal?"primary":"secondary";Accessible.name:page.addingGoal?"목적지 추가 취소":"목적지 추가";ToolTip.visible:hovered;ToolTip.text:page.addingGoal?"추가 취소 (Esc 또는 우클릭)":"지도에 목적지 추가";enabled:page.editable&&Boolean(page.ui.mapReady);onClicked:page.beginAdd()}
             }
             Item {Layout.fillWidth:true;Layout.fillHeight:true
                 Column {visible:page.goalCount===0;anchors.centerIn:parent;spacing:9

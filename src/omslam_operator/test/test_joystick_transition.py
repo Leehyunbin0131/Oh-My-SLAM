@@ -34,6 +34,8 @@ if __name__ == '__main__':
     window.requestActivate()
     app.processEvents()
     model.setActive(True)
+    assert window.findChild(QObject, 'addGoalButton').isEnabled()
+    assert not window.findChild(QObject, 'initialPoseButton').isEnabled()
     pad = window.findChild(QObject, 'directPad')
     joystick = window.findChild(QQuickItem, 'joystickArea')
     position = joystick.mapToScene(QPointF(joystick.width()/2, joystick.height()/2-30)).toPoint()
