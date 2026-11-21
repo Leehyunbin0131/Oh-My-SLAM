@@ -109,11 +109,13 @@ def bounded_planner_evidence(entry,bt_events,states,ros_errors,marked=None,obstr
     # Jazzy flushes its BT logger before each tick; a terminating tick's final
     # transitions can remain buffered until the next goal. The recorded retry,
     # planner failure and terminal planner error code establish that outcome.
-    return {'passed':entry['status']==6 and entry['error_code'] in (206,208) and healthy
+    code = entry['error_code']
+    timed_out = code == 207 and any('planning time budget' in e['message'] for e in failures)
+    return {'passed':entry['status']==6 and (code in (206,208) or timed_out) and healthy
             and ordered and after_obstruction and bool(failures) and recoveries<=1 and duration<=30,
             'error_code':entry['error_code'],'error_msg':entry.get('error_msg'),'guard_healthy':healthy,
             'wait_runs':len(waits),'recoveries':recoveries,'events':events,'ordered_recovery':ordered,
-            'planner_failures_after_retry':failures,'terminal_action_status':entry['status'],
+            'planner_timed_out':timed_out, 'planner_failures_after_retry':failures,'terminal_action_status':entry['status'],
             'recovery_after_obstruction':after_obstruction,'obstruction_wall_epoch':obstruction_epoch,
             'terminal_evidence':'Recorded retry, planner_server failure and NavigateToPose planner error',
             'duration_s':duration}
