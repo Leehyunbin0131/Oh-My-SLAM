@@ -157,6 +157,7 @@ class NavigationRun:
         self.timing=defaultdict(list);self.tf_edges={};self.states=[];self.goals=[];self.paths=[];self.trajectory=[]
         self.memory_events=[];self.cloud_events=[];self.costmap_events=[];self.command_events=[];self.sensor_observations=[]
         self.ros_errors=[];self.stage='I0';self.mode='slam';self.world_to_map=None;self.initial_odom=None
+        self.odom_node=None;self.odom_executor=None
         self.node=None;self.context=None;self.executor=None;self.writer=None;self.recorded_topics=set()
         self.sim_time=0.;self.last_truth=None;self.minimum_clearance=float('inf');self.collision=[];self.safety_violation=None
         self.active_objects={k:list(v['center']) for k,v in self.course['objects'].items() if v['initial']}
@@ -207,6 +208,13 @@ class NavigationRun:
             if self.sim_time>1500:raise TimeoutError('P4 simulated-time watchdog')
             for label,proc in self.processes.items():
                 if label not in self.allowed_exit and proc.poll() is not None:raise RuntimeError(f'{label} exited unexpectedly: {proc.returncode}')
+            # Drain the odometry reader separately so busy bag/image subscriptions
+            # cannot starve the independent physical-stop observer.
+            for _ in range(16):
+                observations = self.counts['/odom']
+                self.odom_executor.spin_once(timeout_sec=0.)
+                if self.counts['/odom'] == observations:
+                    break
             self.executor.spin_once(timeout_sec=min(.01,max(0,end-time.monotonic())))
             self.process_depth_evidence()
             self.process_costmap_snapshots()
@@ -322,6 +330,9 @@ class NavigationRun:
         self.context=Context();rclpy.init(context=self.context)
         self.node=Node('p4_acceptance_observer',context=self.context,parameter_overrides=[Parameter('use_sim_time',value=True)])
         self.executor=SingleThreadedExecutor(context=self.context);self.executor.add_node(self.node)
+        self.odom_node = Node('p4_odometry_observer', context=self.context)
+        self.odom_executor = SingleThreadedExecutor(context=self.context)
+        self.odom_executor.add_node(self.odom_node)
         self.pump(.5)
         self.e.detail('isolated_ros_graph',self.node.get_node_names()==[self.node.get_name()],nodes=self.node.get_node_names())
         self.buffer=Buffer(node=self.node);self.listener=TransformListener(self.buffer,self.node)
@@ -350,7 +361,8 @@ class NavigationRun:
             if topic == '/odom':
                 # Preserve the 50 Hz measurement window while camera/rosbag callbacks run.
                 qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT)
-            self.node.create_subscription(cls,topic,partial(self.receive,topic),qos)
+            reader = self.odom_node if topic == '/odom' else self.node
+            reader.create_subscription(cls,topic,partial(self.receive,topic),qos)
         self.enable_client=self.node.create_client(SetBool,'/navigation/enable')
         self.fault_clients={k:self.node.create_client(SetBool,'/simulation/fault/'+k) for k in ('scan','depth')}
         self.action=ActionClient(self.node,NavigateToPose,'/navigate_to_pose')
@@ -1321,6 +1333,8 @@ class NavigationRun:
             if label!='simulator':self.stop_process(label)
         self.stop_process('simulator')
         if self.writer is not None:self.writer=None
+        if self.odom_executor is not None:self.odom_executor.shutdown()
+        if self.odom_node is not None:self.odom_node.destroy_node()
         if self.executor is not None:self.executor.shutdown()
         if self.node is not None:self.node.destroy_node()
         if self.context is not None and self.context.ok():self.rclpy.shutdown(context=self.context)
