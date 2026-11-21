@@ -24,7 +24,8 @@ def test_goal_checker_thresholds_are_connected_to_planner_and_dwb(tmp_path):
         assert controller['FollowPath']['trans_stopped_velocity'] == stopped
         assert controller['goal_checker']['trans_stopped_velocity'] == stopped
         # A* fallback distance is deliberately separate from the arrival circle.
-        assert planner['tolerance'] == .1
+        assert planner['tolerance'] == .04
+        assert planner['tolerance'] < xy
         assert controller['goal_checker']['plugin'] == 'nav2_controller::StoppedGoalChecker'
         assert controller['goal_checker']['stateful'] is False
 
