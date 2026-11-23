@@ -14,10 +14,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Int64MultiArray, Float64MultiArray, Bool
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rcl_interfaces.msg import SetParametersResult
-from omslam_operator_msgs.msg import MotorTelemetry
 from .core import Geometry, EncoderOdometry, CommandGate
 from .runner import spin_node
-from .telemetry import AckObservation, encoder_snapshot, serial_snapshot, write_motor_message
 from .vendor import load_control_module
 
 
@@ -68,10 +66,6 @@ class BaseBridge(LifecycleNode):
         self.geometry = None
         self.wheel_vx_variance = self.wheel_wz_variance = None
         self.last_ros = None
-        self.encoder_telemetry = self.motor_telemetry = None
-        self.raw_motor_receipt = None
-        self.last_motor_publish = 0.
-        self.telemetry_error = ''
         self.create_subscription(TwistStamped,'/cmd_vel/requested',self.requested,1)
         self.create_subscription(TwistStamped,'/cmd_vel',self.command,1)
         self.create_subscription(Int64MultiArray,'/mock/encoder_sample',self.mock_sample,10)
@@ -79,7 +73,6 @@ class BaseBridge(LifecycleNode):
         self.odom_pub = self.create_publisher(Odometry,'/wheel/odometry',10)
         self.joint_pub = self.create_publisher(JointState,'/joint_states',10)
         self.diag_pub = self.create_publisher(DiagnosticArray,'/diagnostics',10)
-        self.motor_pub = self.create_publisher(MotorTelemetry,'/base/motor_state',10)
         self.target_pub = self.create_publisher(Float64MultiArray,'/mock/wheel_target',10)
         self.timer = self.create_timer(.02,self.publish,clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.fault_deactivate_pending = False
@@ -115,9 +108,6 @@ class BaseBridge(LifecycleNode):
                 self.gate.clear(); self.sample_queue.clear()
                 self.active = False; self.ready = self.backend == 'mock'; self.error = ''
                 self.received_at = None; self.last_ros = None
-                self.encoder_telemetry = self.motor_telemetry = None
-                self.raw_motor_receipt = None
-                self.telemetry_error = ''
                 self.output = [0.,0.,0.]; self.configured = True
             self.exit_event.clear(); self.stopped.clear()
             self.thread = threading.Thread(target=self.worker,daemon=True,name='motor_io')
@@ -208,15 +198,10 @@ class BaseBridge(LifecycleNode):
     def ingest(self,tick,left,right,received):
         with self.lock:
             if self.error: return
-            previous = self.integrator.last
             measurement = self.integrator.update(tick,left,right,self.get_clock().now().nanoseconds)
             if measurement is not None:
                 self.received_at = received
                 self.sample_queue.append(measurement)
-                self.encoder_telemetry = encoder_snapshot(
-                    tick, (left,right), None if previous is None else previous[1:],
-                    measurement, received, self.backend)
-                if self.backend == 'mock': self.motor_telemetry = self.encoder_telemetry
 
     def mock_sample(self,msg):
         if not self.configured or self.backend != 'mock': return
@@ -262,12 +247,10 @@ class BaseBridge(LifecycleNode):
                 report=Path(self.value('report_dir')); report.mkdir(parents=True,exist_ok=True)
                 def sample_callback(sample):
                     with self.lock:
-                        self.raw_motor_receipt = (sample['stamp'], self.get_clock().now().nanoseconds)
                         if sample.get('fault') and not self.error:
                             self.fail(f"MCU fault {sample['fault']}: {sample.get('fault_reason', '')}")
                     counts = calibration.wheel_data(sample)
                     self.ingest(sample['stamp'], counts['left']['count'],counts['right']['count'],sample['received_at'])
-                acknowledgements = AckObservation()
                 parent = self
                 class SnapshotClient(load_control_module('motor_link').MotorClient):
                     def set_speed(client, left, right, **kwargs):
@@ -290,24 +273,6 @@ class BaseBridge(LifecycleNode):
                                 return None
                             kwargs['lease_ms'] = min(kwargs.get('lease_ms', 300), remaining_ms)
                             return super().set_speed(left, right, **kwargs)
-
-                    # MotorClient.command() also calls this override. Capture
-                    # before it consumes ACKs; no executor accesses the client.
-                    def poll(client, *, block=True):
-                        try:
-                            return super().poll(block=block)
-                        finally:
-                            try:
-                                acknowledgements.observe(client.acks, time.monotonic())
-                                with parent.lock:
-                                    parent.motor_telemetry = serial_snapshot(
-                                        client, calibration, parent.encoder_telemetry,
-                                        parent.raw_motor_receipt, acknowledgements)
-                                    parent.telemetry_error = ''
-                            except Exception as exc:
-                                # An observer must not change transport/stop
-                                # handling or replace the original poll error.
-                                with parent.lock: parent.telemetry_error = str(exc)
                 client = SnapshotClient(self.value('port'),report,
                             calibration=calibration,on_sample=sample_callback)
                 client.__enter__()
@@ -391,8 +356,6 @@ class BaseBridge(LifecycleNode):
             output=list(self.output); error=self.error; active=self.active;ready=self.ready
             deactivate = self.fault_deactivate_pending
             self.fault_deactivate_pending = False
-            motor_snapshot = self.motor_telemetry
-            telemetry_error = self.telemetry_error
             vx_variance, wz_variance = self.wheel_vx_variance, self.wheel_wz_variance
         if deactivate:
             self.trigger_deactivate()
@@ -414,19 +377,13 @@ class BaseBridge(LifecycleNode):
             self.joint_pub.publish(joint)
         if self.backend == 'mock': self.target_pub.publish(Float64MultiArray(data=output))
         now=time.monotonic()
-        if motor_snapshot is not None and now-self.last_motor_publish >= .05:
-            msg = write_motor_message(MotorTelemetry(), motor_snapshot, now,
-                                      self.get_clock().now().nanoseconds, KeyValue)
-            self.motor_pub.publish(msg)
-            self.last_motor_publish = now
         if now-self.last_diag >= 1. or error != self.last_diag_error:
             self.last_diag_error = error
             status=DiagnosticStatus();status.name='omslam_base';status.hardware_id=self.backend
             status.level=DiagnosticStatus.ERROR if error else DiagnosticStatus.OK if ready else DiagnosticStatus.WARN
             status.message=error or ('active' if active else 'inactive' if ready else 'connecting')
             status.values=[KeyValue(key='backend',value=self.backend),KeyValue(key='active',value=str(active)),
-                           KeyValue(key='feedback_age_s',value=str(None if self.received_at is None else now-self.received_at)),
-                           KeyValue(key='motor_telemetry_error',value=telemetry_error)]
+                           KeyValue(key='feedback_age_s',value=str(None if self.received_at is None else now-self.received_at))]
             msg=DiagnosticArray();msg.header.stamp=self.get_clock().now().to_msg();msg.status=[status];self.diag_pub.publish(msg)
             self.last_diag=now
 

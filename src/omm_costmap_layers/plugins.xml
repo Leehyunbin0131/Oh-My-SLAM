@@ -1,8 +1,0 @@
-<library path="obstacle_memory_layer">
-  <class type="omm_costmap_layers::ObstacleMemoryLayer" base_class_type="nav2_costmap_2d::Layer">
-    <description>Camera occupancy survives costmap resets and lidar clearing.</description>
-  </class>
-  <class type="omm_costmap_layers::KeepoutLayer" base_class_type="nav2_costmap_2d::Layer">
-    <description>Map-bound operator no-entry rectangles, retained across ordinary clears.</description>
-  </class>
-</library>

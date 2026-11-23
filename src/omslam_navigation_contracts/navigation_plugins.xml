@@ -1,8 +1,0 @@
-<library path="speed_aware_navigation">
-  <class type="omslam_navigation::SpeedAwareTrajectoryGenerator" base_class_type="dwb_core::TrajectoryGenerator">
-    <description>DWB trajectory sampling across multiple cells at low wheel RPM.</description>
-  </class>
-  <class type="omslam_navigation::SpeedAwareProgressChecker" base_class_type="nav2_core::ProgressChecker">
-    <description>Checks measured translation or rotation against the operator's effective speed limits.</description>
-  </class>
-</library>

@@ -2,7 +2,7 @@
 <package format="3">
   <name>omslam_navigation</name>
   <version>0.1.0</version>
-  <description>Simulation navigation with State Lattice, DWB and observation-aware command gating.</description>
+  <description>Minimal standard Nav2 navigation with LiDAR SLAM/AMCL, State Lattice and DWB.</description>
   <maintainer email="hyunlee@users.noreply.github.com">Hyun Lee</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
@@ -10,22 +10,8 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>rcl_interfaces</exec_depend>
-  <exec_depend>lifecycle_msgs</exec_depend>
-  <exec_depend>action_msgs</exec_depend>
-  <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>nav2_rviz_plugins</exec_depend>
-  <exec_depend>std_srvs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>diagnostic_msgs</exec_depend>
-  <exec_depend>rosgraph_msgs</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>nav2_smac_planner</exec_depend>
   <exec_depend>nav2_planner</exec_depend>
   <exec_depend>nav2_controller</exec_depend>
@@ -38,16 +24,9 @@
   <exec_depend>nav2_behaviors</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>nav2_velocity_smoother</exec_depend>
-  <exec_depend>nav2_collision_monitor</exec_depend>
   <exec_depend>omslam_base</exec_depend>
   <exec_depend>omslam_sim</exec_depend>
   <exec_depend>omslam_mapping</exec_depend>
-  <exec_depend>omslam_navigation_contracts</exec_depend>
-  <exec_depend>omm_perception_msgs</exec_depend>
-  <exec_depend>omslam_operator_msgs</exec_depend>
-  <exec_depend>unique_identifier_msgs</exec_depend>
-  <exec_depend>omm_perception</exec_depend>
-  <exec_depend>omm_costmap_layers</exec_depend>
   <test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

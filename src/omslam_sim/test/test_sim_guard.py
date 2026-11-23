@@ -66,13 +66,13 @@ def test_coupled_wheel_limit_and_zero_watermark():
     assert g.sample(10.04)==(0.,0.)
 
 
-def test_simulation_default_accepts_42_rpm_straight_before_expiring():
+def test_simulation_default_accepts_70_rpm_straight_before_expiring():
     guard = active_guard()
-    maximum = 2 * math.pi * .068 * 42 / 60
+    maximum = 2 * math.pi * .068 * 70 / 60
     command(guard, vx=maximum, wz=0.)
-    assert guard.geometry.max_rpm == 42.
+    assert guard.geometry.max_rpm == 70.
     assert guard.sample(10.02) == pytest.approx((maximum, 0.))
-    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((42., 42.))
+    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((70., 70.))
     assert guard.sample(10.32) == (0., 0.)
 
 
@@ -90,7 +90,8 @@ def test_rewind_requires_new_wheel_sample_and_lifecycle_activation():
                            last_odom_stamp=8_000_000_000, last_odom_at=now, last_diag=now,
                            get_logger=lambda: SimpleNamespace(error=lambda *args: None),
                            output=SimpleNamespace(publish=lambda msg: output.append(msg.linear.x)),
-                           wheel=SimpleNamespace(publish=lambda msg: None), val=lambda key: .01,
+                           wheel=SimpleNamespace(publish=lambda msg: None),
+                           val=lambda key: False if key == 'autostart' else .01,
                            wheel_vx_variance=.0025, wheel_wz_variance=.01)
     node.trigger_deactivate = lambda: SimBase.on_deactivate(node, None)
     node.publish_velocity = lambda vx, wz: SimBase.publish_velocity(node, vx, wz)
@@ -137,7 +138,7 @@ def test_wheel_odometry_keeps_payload_and_uses_covariance_cached_at_configure():
     from omslam_sim.sim_base import SimBase
 
     params = {'use_sim_time': True, 'left_radius': .068, 'right_radius': .068, 'wheel_separation': .480,
-              'max_rpm': 42., 'clock_stall_timeout': .3, 'wheel_vx_variance': .0004, 'wheel_wz_variance': .0009}
+              'max_rpm': 70., 'clock_stall_timeout': .3, 'wheel_vx_variance': .0004, 'wheel_wz_variance': .0009}
     published = []
     node = SimpleNamespace(val=params.__getitem__, configured=False, latest_clock=None, clock_advanced_at=None,
                            guard=SimCommandGuard(),

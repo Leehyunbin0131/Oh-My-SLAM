@@ -79,12 +79,6 @@ def test_serial_worker_uses_public_api_and_measured_feedback(monkeypatch, tmp_pa
     assert stub.sample_queue[-1]['x']>0
     assert stub.sample_queue[-1]['yaw']==0
     assert stub.output==[0.,0.,0.]
-    values=stub.motor_telemetry.values(time.monotonic())
-    assert values['backend']=='serial' and values['counts']==[20,20]
-    assert values['measured_rpm']==[9.,10.5] and values['target_rpm']==[10.,12.]
-    assert values['encoder_rpm'] != values['measured_rpm']
-    assert values['ack_sequence']==4 and values['ack_status']=='OK'
-    assert not stub.telemetry_error
 
 
 @pytest.mark.parametrize('event', ['stop', 'deactivate', 'fault'])
@@ -177,7 +171,6 @@ def test_serial_worker_invalidates_delayed_arm_and_latches_idle_fault(monkeypatc
         if event == 'fault':
             assert fault_received.wait(2.)
             with node.lock:
-                assert node.motor_telemetry.fields['fault'] == 2
                 assert BaseBridge.on_activate(node, None) == TransitionCallbackReturn.FAILURE
                 assert 'MCU fault 2' in node.error and not node.active
                 messages = []

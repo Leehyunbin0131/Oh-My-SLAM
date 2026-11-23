@@ -103,8 +103,8 @@ def simulation_urdf(settings=None):
         'min_linear_velocity': -2*math.pi*.068*settings['max_wheel_rpm']/60,
         'max_angular_velocity': 4*math.pi*.068*settings['max_wheel_rpm']/60/.480,
         'min_angular_velocity': -4*math.pi*.068*settings['max_wheel_rpm']/60/.480,
-        'max_linear_acceleration': .5, 'min_linear_acceleration': -.5,
-        'max_angular_acceleration': 1.0, 'min_angular_acceleration': -1.0,
+        'max_linear_acceleration': .8, 'min_linear_acceleration': -1.5,
+        'max_angular_acceleration': 1.0, 'min_angular_acceleration': -1.5,
     }.items():
         ET.SubElement(drive, key).text = str(value)
     joints = ET.SubElement(gazebo, 'plugin', filename='gz-sim-joint-state-publisher-system',

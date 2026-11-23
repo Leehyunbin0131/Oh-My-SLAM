@@ -17,8 +17,6 @@ from sensor_msgs.msg import JointState
 from rosgraph_msgs.msg import Clock as ClockMessage
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from omslam_base.core import Geometry
-from omslam_base.telemetry import JointTelemetry, with_sim_target, write_motor_message
-from omslam_operator_msgs.msg import MotorTelemetry
 from .control import SIM_MAX_WHEEL_RPM, SimCommandGuard
 
 
@@ -31,7 +29,7 @@ class SimBase(LifecycleNode):
         super().__init__('sim_base')
         for key, value in {'left_radius': .068, 'right_radius': .068, 'wheel_separation': .480,
                            'max_rpm': SIM_MAX_WHEEL_RPM, 'wheel_vx_variance': .0025, 'wheel_wz_variance': .01,
-                           'clock_stall_timeout': .3}.items():
+                           'clock_stall_timeout': .3, 'autostart': False}.items():
             self.declare_parameter(key, value)
         self.configured = False
         self.wheel_vx_variance = self.wheel_wz_variance = None
@@ -42,17 +40,13 @@ class SimBase(LifecycleNode):
         self.latest_clock = None
         self.clock_advanced_at = None
         self.last_diag = 0.
-        self.joint_telemetry = JointTelemetry()
-        self.last_motor_publish = 0.
         self.output = self.create_publisher(Twist, '/sim/cmd_vel', 1)
         self.wheel = self.create_publisher(Odometry, '/wheel/odometry', 10)
         self.diag = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
-        self.motor = self.create_publisher(MotorTelemetry, '/base/motor_state', 10)
         self.create_subscription(ClockMessage, '/clock', self.clock_sample,
                                  QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                                             durability=DurabilityPolicy.VOLATILE))
         self.create_subscription(Odometry, '/sim/wheel/odometry_raw', self.odometry, qos_profile_sensor_data)
-        self.create_subscription(JointState, '/joint_states', self.joints, qos_profile_sensor_data)
         self.create_subscription(TwistStamped, '/cmd_vel/requested', self.requested, 1)
         self.create_subscription(TwistStamped, '/cmd_vel', self.final, 1)
         # Wall/monotonic timer continues to publish zero while /clock is paused.
@@ -80,7 +74,6 @@ class SimBase(LifecycleNode):
             if self.latest_clock is not None:
                 self.guard.clock(self.latest_clock, self.clock_advanced_at)
             self.last_odom_stamp = self.last_odom_at = None
-            self.joint_telemetry = JointTelemetry()
             self.configured = True
             return TransitionCallbackReturn.SUCCESS
         except Exception as exc:
@@ -108,7 +101,6 @@ class SimBase(LifecycleNode):
     def on_cleanup(self, state):
         self.on_deactivate(state); self.configured = False
         self.last_odom_stamp = self.last_odom_at = None
-        self.joint_telemetry = JointTelemetry()
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state): return self.on_cleanup(state)
@@ -121,7 +113,6 @@ class SimBase(LifecycleNode):
         if self.latest_clock is None or ns != self.latest_clock:
             if rewound:
                 self.last_odom_stamp = self.last_odom_at = None
-                self.joint_telemetry = JointTelemetry()
             self.latest_clock = ns; self.clock_advanced_at = now
         self.guard.clock(ns, now)
         if rewound and was_active:
@@ -129,14 +120,6 @@ class SimBase(LifecycleNode):
             self.guard.reason = 'clock rewound; fresh wheels and reactivation required'
         elif self.output_moving:
             self.check_expiry(now)
-
-    def joints(self, msg):
-        if not self.configured or self.latest_clock is None:
-            return
-        ns = stamp_ns(msg.header.stamp)
-        if abs(self.latest_clock-ns) > 300_000_000:
-            return
-        self.joint_telemetry.accept(list(msg.name), msg.position, msg.velocity, ns, time.monotonic())
 
     def odometry(self, msg):
         if not self.configured or self.latest_clock is None: return
@@ -194,18 +177,20 @@ class SimBase(LifecycleNode):
 
     def tick(self):
         now = time.monotonic()
+        if self.val('autostart'):
+            if not self.configured:
+                self.trigger_configure()
+            elif (not self.guard.active and self.last_odom_at is not None and
+                    0 <= now - self.last_odom_at < .4 and self.last_odom_stamp is not None and
+                    self.latest_clock is not None and
+                    -20_000_000 <= self.latest_clock - self.last_odom_stamp < 300_000_000):
+                self.trigger_activate()
         if (self.configured and self.guard.active and (self.last_odom_stamp is None
                 or self.latest_clock-self.last_odom_stamp > 400_000_000)):
             self.trigger_deactivate()
             self.guard.reason = 'wheel feedback stale; reactivation required'
         vx, wz = self.guard.sample(now) if self.configured else (0., 0.)
         self.publish_velocity(vx, wz)
-        if self.joint_telemetry.snapshot is not None and now-self.last_motor_publish >= .05:
-            published_ns = self.get_clock().now().nanoseconds
-            snapshot = with_sim_target(self.joint_telemetry.snapshot,
-                                       self.guard.geometry.rpm(vx, wz), published_ns)
-            self.motor.publish(write_motor_message(MotorTelemetry(), snapshot, now, published_ns, KeyValue))
-            self.last_motor_publish = now
         if now-self.last_diag >= 1.:
             status = DiagnosticStatus(name='sim_base', hardware_id='Gazebo wheel feedback',
                                       level=DiagnosticStatus.OK if self.configured and self.guard.clock_fresh(now) else DiagnosticStatus.WARN,

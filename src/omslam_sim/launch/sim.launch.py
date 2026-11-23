@@ -33,7 +33,8 @@ def setup(context):
              remappings=[('/scan','/sim/sensors/scan'),
                          ('/camera/depth/image_rect_raw','/sim/sensors/depth')] if relay else []),
         LifecycleNode(package='omslam_sim', executable='sim_base', name='sim_base', namespace='',
-                      parameters=[str(share/'config/sim_base.yaml')], output='screen'),
+                      parameters=[str(share/'config/sim_base.yaml'),
+                                  {'autostart': get('autostart_base').lower() == 'true'}], output='screen'),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(str(localization/'launch/localization.launch.py')),
             launch_arguments={'use_sim_time':'true','imu_source':'external','publish_static_tfs':'false'}.items()),
     ]
@@ -45,6 +46,6 @@ def setup(context):
 
 def generate_launch_description():
     defaults = {'world':'airport','fault_relay':'false','gui':'true','pedestrians':'true','gui_renderer':'ogre','verbosity':'2',
-                'x':'','y':'0.0','yaw':'0.0'}
+                'x':'','y':'0.0','yaw':'0.0','autostart_base':'false'}
     return LaunchDescription([DeclareLaunchArgument(k,default_value=v) for k,v in defaults.items()]
                              + [OpaqueFunction(function=setup)])
