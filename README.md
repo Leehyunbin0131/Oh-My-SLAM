@@ -1,4 +1,4 @@
-<h1 align="center">Oh_My_SLAM</h1>
+<h1 align="center">Oh-My-SLAM</h1>
 
 <p align="center">
   <em>Oh My MobileRobot의 1 kHz 하드웨어 구동 제어와 ROS 2 SLAM · Nav2 자율주행을 연결하는 통합 워크스페이스</em>
@@ -15,7 +15,7 @@
 
 ---
 
-**Oh_My_SLAM**은 [`Oh-My-MobileRobot`](https://github.com/Leehyunbin0131/Oh-My-MobileRobot)의 기구·URDF 모델과 [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control)의 **Arduino Mega 1 kHz 모터 제어·센서 보정 계층**을 상위 **ROS 2 자율주행 스택(`slam_toolbox`, `AMCL`, `Nav2`)**으로 통합하는 워크스페이스입니다.
+**Oh-My-SLAM**은 [`Oh-My-MobileRobot`](https://github.com/Leehyunbin0131/Oh-My-MobileRobot)의 기구·URDF 모델과 [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control)의 **Arduino Mega 1 kHz 모터 제어·센서 보정 계층**을 상위 **ROS 2 자율주행 스택(`slam_toolbox`, `AMCL`, `Nav2`)**으로 통합하는 워크스페이스입니다.
 
 시뮬레이션(**Gazebo Harmonic**)과 실제 로봇(**Jetson Orin Nano Super + Arduino Mega 2560**)이 **동일한 ROS 2 토픽·TF·명령 수명 계약**을 공유하도록 설계하여, 가상 환경에서 검증한 위치추정·지도 작성·경로 주행·장애물 인지 파이프라인을 실물 로봇에 그대로 적용합니다.
 
@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | **1. 하드웨어 · 모델** | [`Oh-My-MobileRobot`](https://github.com/Leehyunbin0131/Oh-My-MobileRobot) | 2020 프로파일 프레임, 3D 프린팅 외장 CAD·STL·도면, 구매 부품(BOM), ROS 1/2 URDF 모델 |
 | **2. 하위 제어 · 진단** | [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control) | Arduino Mega 1 kHz 폐루프 모터 제어 펌웨어, 모터 PID·IMU 정지 보정, Jetson Orin 수동 조종 및 터미널 진단(TUI) |
-| **3. 자율주행 (SLAM · Nav2)** | **`Oh_My_SLAM`** *(현재 저장소)* | 구동 제어기–ROS 2 브리지, Gazebo 시뮬레이션, 실물 2D SLAM(`slam_toolbox` / `AMCL`) 및 `Nav2` 자율주행 통합 |
+| **3. 자율주행 (SLAM · Nav2)** | **`Oh-My-SLAM`** *(현재 저장소)* | 구동 제어기–ROS 2 브리지, Gazebo 시뮬레이션, 실물 2D SLAM(`slam_toolbox` / `AMCL`) 및 `Nav2` 자율주행 통합 |
 
 <a id="architecture"></a>
 
@@ -133,8 +133,8 @@ flowchart LR
 - **데이터 분리**: 실물 실내 지도, 원본 `rosbag`, 장비별 로컬 설정 및 상세 실행 로그(`reports/`)는 Git 저장소 외부에 보관하며, 공개 가능한 검증 요약과 재현 절차만 문서에 기록합니다.
 
 ```bash
-git clone https://github.com/Leehyunbin0131/Oh_My_SLAM.git
-cd Oh_My_SLAM
+git clone https://github.com/Leehyunbin0131/Oh-My-SLAM.git
+cd Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-up-to omslam_sim \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
