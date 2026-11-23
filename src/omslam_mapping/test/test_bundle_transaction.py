@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from rclpy.executors import ExternalShutdownException
 from omslam_mapping import map_bundle
 from omslam_mapping.bundle_transaction import BUNDLE_SUFFIXES, staged_map
 
@@ -92,3 +93,34 @@ def test_graph_reader_cannot_open_incomplete_publication(tmp_path):
                 os.link(str(stage)+ext, str(prefix)+ext)
             map_bundle._load(SimpleNamespace(input=str(prefix)))
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('error', [ExternalShutdownException(), RuntimeError('Service response timed out')])
+def test_shutdown_during_pending_service_rolls_back_and_releases_reservation(tmp_path, monkeypatch, capsys, error):
+    import rclpy
+    prefix = tmp_path / 'maps' / 'warehouse'
+    (tmp_path / 'dependencies.repos').write_text('repositories: {}\n')
+    monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'OFF')
+    monkeypatch.setattr(map_bundle, '_git', lambda _: {'workspace': str(tmp_path)})
+    monkeypatch.setattr(map_bundle, '_parameters', lambda *args: {'mode': 'mapping'})
+
+    def raster(cmd, **kwargs):
+        stage = Path(cmd[cmd.index('-f')+1])
+        Path(str(stage)+'.pgm').write_bytes(b'P5\n1 1\n255\n\0')
+        Path(str(stage)+'.yaml').write_text('image: warehouse.pgm\n')
+        return SimpleNamespace(returncode=0)
+
+    def pending(node, *args):
+        # A signal shuts the context down while the graph service is pending.
+        node.context.try_shutdown()
+        raise error
+
+    monkeypatch.setattr(map_bundle.subprocess, 'run', raster)
+    monkeypatch.setattr(map_bundle, '_call', pending)
+    argv = ['--output', str(prefix), '--workspace', str(tmp_path), '--timeout', '2']
+    assert map_bundle.save_main(argv) == 1
+    assert not rclpy.ok()
+    # No public member, staging attempt or reservation lock remains.
+    assert list(prefix.parent.iterdir()) == []
+    message = capsys.readouterr().err
+    assert ('interrupted' if isinstance(error, ExternalShutdownException) else 'timed out') in message

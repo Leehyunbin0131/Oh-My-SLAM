@@ -90,7 +90,8 @@ def test_rewind_requires_new_wheel_sample_and_lifecycle_activation():
                            last_odom_stamp=8_000_000_000, last_odom_at=now, last_diag=now,
                            get_logger=lambda: SimpleNamespace(error=lambda *args: None),
                            output=SimpleNamespace(publish=lambda msg: output.append(msg.linear.x)),
-                           wheel=SimpleNamespace(publish=lambda msg: None), val=lambda key: .01)
+                           wheel=SimpleNamespace(publish=lambda msg: None), val=lambda key: .01,
+                           wheel_vx_variance=.0025, wheel_wz_variance=.01)
     node.trigger_deactivate = lambda: SimBase.on_deactivate(node, None)
     node.publish_velocity = lambda vx, wz: SimBase.publish_velocity(node, vx, wz)
     node.check_expiry = lambda now: SimBase.check_expiry(node, now)
@@ -125,3 +126,65 @@ def test_rewind_requires_new_wheel_sample_and_lifecycle_activation():
     assert output[count:] == [0.]
     clock(1_405_000_000)
     assert output[count:] == [0.]
+
+
+def test_wheel_odometry_keeps_payload_and_uses_covariance_cached_at_configure():
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from rclpy.lifecycle import TransitionCallbackReturn
+    from rclpy.time import Time
+    from nav_msgs.msg import Odometry
+    from omslam_sim.sim_base import SimBase
+
+    params = {'use_sim_time': True, 'left_radius': .068, 'right_radius': .068, 'wheel_separation': .480,
+              'max_rpm': 42., 'clock_stall_timeout': .3, 'wheel_vx_variance': .0004, 'wheel_wz_variance': .0009}
+    published = []
+    node = SimpleNamespace(val=params.__getitem__, configured=False, latest_clock=None, clock_advanced_at=None,
+                           guard=SimCommandGuard(),
+                           output_moving=False, get_logger=lambda: SimpleNamespace(error=lambda *args, **kw: None),
+                           output=SimpleNamespace(publish=lambda msg: None),
+                           wheel=SimpleNamespace(publish=published.append))
+    node.publish_velocity = lambda vx, wz: SimBase.publish_velocity(node, vx, wz)
+    node.on_deactivate = lambda state: SimBase.on_deactivate(node, state)
+
+    def wheel(ns):
+        msg = Odometry()
+        msg.header.stamp = Time(nanoseconds=ns).to_msg()
+        msg.header.frame_id, msg.child_frame_id = 'odom', 'base_footprint'
+        pose, twist = msg.pose.pose, msg.twist.twist
+        pose.position.x, pose.position.y, pose.position.z = 1.5, -2.25, .125
+        pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = .01, -.02, .6, .8
+        twist.linear.x, twist.linear.y, twist.linear.z = .3, .04, -.05
+        twist.angular.x, twist.angular.y, twist.angular.z = .006, -.007, .8
+        msg.pose.covariance = [float(i + 1) for i in range(36)]
+        msg.twist.covariance = [float(100 + i) for i in range(36)]
+        node.latest_clock = ns
+        return msg
+
+    def expected_covariance(diagonal):
+        return [diagonal.get(i, 0.) for i in range(36)]
+
+    assert SimBase.on_configure(node, None) == TransitionCallbackReturn.SUCCESS
+    # Odometry uses the values validated at configure, not later reads.
+    params['wheel_vx_variance'] = params['wheel_wz_variance'] = float('nan')
+    raw = wheel(2_000_000_000)
+    original = deepcopy(raw)
+    SimBase.odometry(node, raw)
+    output = published[-1]
+    assert raw == original and output is not raw
+    assert output.header == raw.header and output.child_frame_id == 'base_footprint'
+    assert output.pose.pose == raw.pose.pose and output.twist.twist == raw.twist.twist
+    assert list(output.pose.covariance) == expected_covariance({i: 1e3 for i in (0, 7, 14, 21, 28, 35)})
+    assert list(output.twist.covariance) == expected_covariance(
+        {0: .0004, 7: 1e3, 14: 1e3, 21: 1e3, 28: 1e3, 35: .0009})
+    output.pose.pose.position.z = 9.
+    output.twist.twist.angular.x = 9.
+    assert raw == original
+
+    assert SimBase.on_cleanup(node, None) == TransitionCallbackReturn.SUCCESS
+    assert SimBase.on_configure(node, None) == TransitionCallbackReturn.FAILURE
+    params['wheel_vx_variance'], params['wheel_wz_variance'] = .0016, .0036
+    assert SimBase.on_configure(node, None) == TransitionCallbackReturn.SUCCESS
+    SimBase.odometry(node, wheel(3_000_000_000))
+    assert len(published) == 2
+    assert published[-1].twist.covariance[0] == .0016 and published[-1].twist.covariance[35] == .0036

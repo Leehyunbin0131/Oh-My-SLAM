@@ -1,8 +1,8 @@
 """Explicit synthetic gyro source for software checks, never wheel-derived."""
-import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
+from omslam_base.runner import spin_node
 
 
 class MockImu(Node):
@@ -12,6 +12,7 @@ class MockImu(Node):
         self.declare_parameter('frame_id', 'imu_link')
         self.declare_parameter('variance', 0.0001)
         self.publisher = self.create_publisher(Imu, '/imu/raw', qos_profile_sensor_data)
+        # ROS-time timer: a paused simulation emits no repeated synthetic stamps.
         self.create_timer(.02, self.sample)
         self.get_logger().warn('SYNTHETIC IMU: independent constant gyro fixture, not a physical sensor')
 
@@ -27,9 +28,4 @@ class MockImu(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args); node = MockImu()
-    try: rclpy.spin(node)
-    except KeyboardInterrupt: pass
-    finally:
-        node.destroy_node()
-        if rclpy.ok(): rclpy.shutdown()
+    spin_node(MockImu, args=args)

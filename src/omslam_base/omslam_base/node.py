@@ -5,7 +5,6 @@ import math
 import threading
 import time
 
-import rclpy
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
 from rclpy.clock import Clock, ClockType
 from rclpy.qos import QoSProfile
@@ -17,6 +16,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rcl_interfaces.msg import SetParametersResult
 from omslam_operator_msgs.msg import MotorTelemetry
 from .core import Geometry, EncoderOdometry, CommandGate
+from .runner import spin_node
 from .telemetry import AckObservation, encoder_snapshot, serial_snapshot, write_motor_message
 from .vendor import load_control_module
 
@@ -66,6 +66,7 @@ class BaseBridge(LifecycleNode):
         self.stopped = threading.Event()
         self.stopped.set()
         self.geometry = None
+        self.wheel_vx_variance = self.wheel_wz_variance = None
         self.last_ros = None
         self.encoder_telemetry = self.motor_telemetry = None
         self.raw_motor_receipt = None
@@ -105,9 +106,11 @@ class BaseBridge(LifecycleNode):
                                      self.value('wheel_separation'), self.value('counts_per_rev'),self.value('max_rpm'))
             if self.geometry.max_rpm > 95.:
                 raise ValueError('Base bridge operating limit must not exceed 95 RPM')
-            if any(not math.isfinite(self.value(n)) or self.value(n) <= 0 for n in
-                   ('wheel_vx_variance','wheel_wz_variance')): raise ValueError('invalid covariance')
+            vx_variance, wz_variance = (self.value(n) for n in ('wheel_vx_variance','wheel_wz_variance'))
+            if any(not math.isfinite(v) or v <= 0 for v in (vx_variance, wz_variance)):
+                raise ValueError('invalid covariance')
             with self.lock:
+                self.wheel_vx_variance, self.wheel_wz_variance = float(vx_variance), float(wz_variance)
                 self.integrator = EncoderOdometry(self.geometry)
                 self.gate.clear(); self.sample_queue.clear()
                 self.active = False; self.ready = self.backend == 'mock'; self.error = ''
@@ -228,6 +231,27 @@ class BaseBridge(LifecycleNode):
     def worker(self):
         client = drive = None
         target = last_target = generation = None
+        # Set when a brake frame lost its legal lease at the serial write.
+        release = False
+
+        def live_target(selected, selected_generation, brake, now):
+            """Return the live gate target that still authorizes `selected`.
+
+            The caller holds self.lock. A moving frame needs the selected
+            target of the selected generation. A zero frame only brakes, so
+            any live zero HOLD authorizes it: a repeated zero stop withdraws
+            and re-creates the same HOLD, which advances the generation
+            without changing the brake or its original issue time.
+            """
+            if not self.active or self.error:
+                return None
+            live = self.gate.current(now)
+            if live is None:
+                return None
+            if selected_generation == self.gate.generation and live == selected:
+                return live
+            return live if brake and live[0] == 0. and live[1] == 0. else None
+
         try:
             if self.backend == 'serial':
                 calibration = load_control_module('drive_calibration').DriveCalibration.load(self.value('drive_calibration'))
@@ -247,20 +271,24 @@ class BaseBridge(LifecycleNode):
                 parent = self
                 class SnapshotClient(load_control_module('motor_link').MotorClient):
                     def set_speed(client, left, right, **kwargs):
+                        nonlocal release
                         # ARM may have blocked while the executor accepted a stop.
                         # Serialize this bounded serial write with gate mutations;
                         # status polls and the ARM acknowledgement stay outside.
+                        # One live sample decides validity and the wire lease;
+                        # the live target's original issue time caps the lease.
                         with parent.lock:
-                            if (left or right) and (
-                                    not parent.active or parent.error or
-                                    generation != parent.gate.generation or
-                                    target != parent.gate.current(time.monotonic())):
+                            now = time.monotonic()
+                            brake = not (left or right)
+                            current = live_target(target, generation, brake, now)
+                            remaining_ms = int(1000 * (.3 - (now - current[2]))) if current else 0
+                            if remaining_ms < 100:
+                                if brake:
+                                    # Never renew a brake past its original
+                                    # lease; the worker sends STOP instead.
+                                    release = True
                                 return None
-                            if left or right:
-                                remaining_ms = int(1000 * (.3 - (time.monotonic() - target[2])))
-                                if remaining_ms < 100:
-                                    return None
-                                kwargs['lease_ms'] = min(kwargs['lease_ms'], remaining_ms)
+                            kwargs['lease_ms'] = min(kwargs.get('lease_ms', 300), remaining_ms)
                             return super().set_speed(left, right, **kwargs)
 
                     # MotorClient.command() also calls this override. Capture
@@ -326,15 +354,27 @@ class BaseBridge(LifecycleNode):
                             finally:
                                 assignment_time = None
                         drive.tick()
-                    # Mirror the minimum wire lease rule for mock diagnostics.
-                    if remaining < .1 and not any(rpms): rpms=(0.,0.); remaining=0.
-                    with self.lock:
-                        if (self.active and self.gate.generation == generation and
-                                self.gate.current(time.monotonic()) == target):
-                            self.output=[*rpms,max(0.,remaining)]
-                        else:
-                            self.output=[0.,0.,0.]
-                    disabled=False; last_target=target
+                    if release:
+                        # tick() selected a brake lease that expired or was
+                        # withdrawn before the write. Disable the drive so
+                        # its engaged state matches the STOP on the wire.
+                        release = False
+                        drive.disable()
+                        disabled=True; last_target=None
+                        with self.lock: self.output=[0.,0.,0.]
+                    else:
+                        # /mock/wheel_target reports the selected target and
+                        # its remaining lifetime, not a wire ACK. A zero target
+                        # with under 100 ms left is reported as released, as
+                        # WheelDrive.tick() then sends STOP via disable().
+                        # A repeated zero stop keeps a live brake reported.
+                        if remaining < .1 and not any(rpms): rpms=(0.,0.); remaining=0.
+                        with self.lock:
+                            if live_target(target, generation, not any(rpms), time.monotonic()):
+                                self.output=[*rpms,max(0.,remaining)]
+                            else:
+                                self.output=[0.,0.,0.]
+                        disabled=False; last_target=target
                 self.exit_event.wait(.01)
         except Exception as exc:
             self.fail(exc)
@@ -353,6 +393,7 @@ class BaseBridge(LifecycleNode):
             self.fault_deactivate_pending = False
             motor_snapshot = self.motor_telemetry
             telemetry_error = self.telemetry_error
+            vx_variance, wz_variance = self.wheel_vx_variance, self.wheel_wz_variance
         if deactivate:
             self.trigger_deactivate()
         for sample in samples:
@@ -364,9 +405,11 @@ class BaseBridge(LifecycleNode):
             msg.twist.twist.linear.x=sample['vx'];msg.twist.twist.angular.z=sample['wz']
             for i in (0,7,14,21,28,35): msg.pose.covariance[i]=1e3
             for i in (7,14,21,28):msg.twist.covariance[i]=1e3
-            msg.twist.covariance[0]=self.value('wheel_vx_variance');msg.twist.covariance[35]=self.value('wheel_wz_variance')
+            msg.twist.covariance[0]=vx_variance;msg.twist.covariance[35]=wz_variance
             self.odom_pub.publish(msg)
-            joint=JointState();joint.header=msg.header;joint.header.frame_id='base_footprint'
+            # Copy the stamp only; the odometry header stays in the odom frame.
+            joint=JointState();joint.header.frame_id='base_footprint'
+            joint.header.stamp.sec=msg.header.stamp.sec;joint.header.stamp.nanosec=msg.header.stamp.nanosec
             joint.name=['left_wheel_joint','right_wheel_joint'];joint.position=sample['positions'];joint.velocity=sample['velocities']
             self.joint_pub.publish(joint)
         if self.backend == 'mock': self.target_pub.publish(Float64MultiArray(data=output))
@@ -389,10 +432,8 @@ class BaseBridge(LifecycleNode):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node=BaseBridge()
-    try: rclpy.spin(node)
-    except KeyboardInterrupt: pass
-    finally:
-        node.close_worker();node.destroy_node()
-        if rclpy.ok():rclpy.shutdown()
+    def close(node):
+        # Runs while the node and context are valid, before their teardown.
+        if not node.close_worker():
+            raise SystemExit('base_bridge: motor I/O worker did not stop; check the motor controller')
+    spin_node(BaseBridge, args=args, before_destroy=close)

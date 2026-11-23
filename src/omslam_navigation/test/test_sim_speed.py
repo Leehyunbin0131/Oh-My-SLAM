@@ -12,10 +12,10 @@ from omslam_navigation.launch_support import load_configuration, validate_config
 from omslam_navigation.operator_core import OperatorGate
 
 
-def test_installed_35_rpm_profile_and_default_operator_fraction():
+def test_installed_42_rpm_profile_and_default_operator_fraction():
     share = Path(get_package_share_directory('omslam_navigation'))
     config = load_configuration(share)
-    maximum = 2 * math.pi * .068 * 35 / 60
+    maximum = 42.0 * math.pi / 30.0 * .068
     dwb = config['controller_server']['ros__parameters']['FollowPath']
     smoother = config['velocity_smoother']['ros__parameters']
     guard = config['navigation_guard']['ros__parameters']
@@ -25,7 +25,7 @@ def test_installed_35_rpm_profile_and_default_operator_fraction():
     assert gate.speed_percent == 50.
     assert gate.linear_limit == pytest.approx(maximum / 2, abs=1e-9)
     assert gate.angular_limit == .25
-    for package, filename, expected in [('omslam_sim', 'sim_base.yaml', 35.), ('omslam_base', 'base.yaml', 95.)]:
+    for package, filename, expected in [('omslam_sim', 'sim_base.yaml', 42.), ('omslam_base', 'base.yaml', 95.)]:
         data = yaml.safe_load((Path(get_package_share_directory(package)) / 'config' / filename).read_text())
         assert next(iter(data.values()))['ros__parameters']['max_rpm'] == expected
     invalid = copy.deepcopy(config)

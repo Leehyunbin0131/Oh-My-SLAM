@@ -8,18 +8,23 @@
 #include <chrono>
 #include <cv_bridge/cv_bridge.hpp>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <omm_perception_msgs/msg/obstacle_memory.hpp>
 #include <omm_perception_msgs/msg/memory_status.hpp>
 #include <omm_perception_msgs/msg/perception_health.hpp>
+#include <optional>
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <tf2/exceptions.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <thread>
 
 namespace omm_perception {
 Eigen::Isometry3d eigenTransform(const geometry_msgs::msg::Transform &t) {
@@ -37,8 +42,8 @@ class ObstacleMemory : public rclcpp::Node {
 public:
   explicit ObstacleMemory(const rclcpp::NodeOptions &options)
       : Node("obstacle_memory", options),
-        memory_(declare_parameter("voxel_size", .05),
-                declare_parameter("max_voxels", 100000)),
+        voxel_size_(declareReadOnlyVoxelSize()),
+        memory_(voxel_size_, declare_parameter("max_voxels", 100000)),
         buffer_(get_clock()), listener_(buffer_) {
     memory_frame_ = declare_parameter("memory_frame", std::string("odom"));
     base_frame_ =
@@ -56,7 +61,7 @@ public:
     max_slope_ = declare_parameter("max_ground_slope", .35);
     require_imu_ = declare_parameter("require_imu", true);
     if (stride_ < 1 || free_frames_ < 5 || min_height_ >= max_height_ ||
-        min_depth_ >= max_depth_ || timeout_ <= 0 || active_radius_ < 1. ||
+        min_depth_ >= max_depth_ || !std::isfinite(timeout_) || timeout_ <= 0 || active_radius_ < 1. ||
         archive_cells_ < 4 || max_slope_ <= 0 || max_slope_ > .7)
       throw std::invalid_argument("Invalid perception parameters");
     rcl_jump_threshold_t threshold{};
@@ -125,8 +130,56 @@ public:
   }
 
 private:
-  void checkSession() {
-    const double now = get_clock()->now().seconds();
+  using SteadyClock = std::chrono::steady_clock;
+  using ReceiptDeadline = std::chrono::time_point<SteadyClock, std::chrono::duration<double>>;
+
+  double declareReadOnlyVoxelSize() {
+    rcl_interfaces::msg::ParameterDescriptor descriptor;
+    descriptor.read_only = true;
+    return declare_parameter("voxel_size", .05, descriptor);
+  }
+
+  bool observationExpired(ReceiptDeadline deadline, double now) {
+    return SteadyClock::now() >= deadline || reset_pending_.load() ||
+           now < last_clock_ || !rclcpp::ok(get_node_base_interface()->get_context());
+  }
+
+  std::optional<geometry_msgs::msg::TransformStamped> lookupObservationTransform(
+      const std::string &target, const std::string &source, const rclcpp::Time &stamp,
+      const rclcpp::Duration &budget, ReceiptDeadline deadline) {
+    const auto start = get_clock()->now();
+    ReceiptDeadline next_attempt = SteadyClock::now();
+    bool attempted = false;
+    while (true) {
+      const auto now = get_clock()->now();
+      if (observationExpired(deadline, now.seconds()))
+        return std::nullopt;
+      // TF can arrive while this thread sleeps past the ROS budget. With the
+      // receipt, shutdown and session checks above still passing, look once
+      // more without waiting before reporting this leg's failure.
+      const bool final_attempt = attempted && now - start >= budget;
+      // The timed TF2 API sleeps on the ROS clock, which can pause in simulation.
+      // The listener can receive TF while this callback waits on the steady clock.
+      if (!final_attempt && SteadyClock::now() < next_attempt) {
+        std::this_thread::sleep_until(next_attempt);
+        continue;
+      }
+      try {
+        return buffer_.lookupTransform(target, source, stamp);
+      } catch (const tf2::TransformException &) {
+        if (final_attempt)
+          throw;
+      }
+      attempted = true;
+      const ReceiptDeadline retry = SteadyClock::now() + std::chrono::milliseconds(10);
+      next_attempt = std::min(retry, deadline);
+    }
+  }
+
+  // Returns the clock sample this check validated for the current session.
+  rclcpp::Time checkSession() {
+    const auto sampled = get_clock()->now();
+    const double now = sampled.seconds();
     if (reset_pending_.exchange(false) || now < last_clock_) {
       pending_depth_.clear();
       info_.reset();
@@ -150,8 +203,10 @@ private:
       }
     }
     last_clock_ = now;
+    return sampled;
   }
-  sensor_msgs::msg::Imu::ConstSharedPtr alignedImu(double stamp) {
+  sensor_msgs::msg::Imu::ConstSharedPtr alignedImu(const rclcpp::Time &image_stamp) {
+    const double stamp = image_stamp.seconds();
     sensor_msgs::msg::Imu::ConstSharedPtr before, after;
     double tb = -1e30, ta = 1e30;
     const double now = get_clock()->now().seconds();
@@ -186,7 +241,8 @@ private:
     result->orientation.x = q.x();
     result->orientation.y = q.y();
     result->orientation.z = q.z();
-    result->header.stamp = rclcpp::Time(int64_t(stamp * 1e9));
+    // Seconds lose nanoseconds at epoch times; keep the exact image stamp.
+    result->header.stamp = image_stamp;
     return result;
   }
   sensor_msgs::msg::PointCloud2
@@ -221,15 +277,16 @@ private:
   // A false result keeps the frame in timestamp order until alignment or expiry.
   bool depth(const sensor_msgs::msg::Image::ConstSharedPtr &msg,
              std::chrono::steady_clock::time_point received) {
-    const double stamp = rclcpp::Time(msg->header.stamp).seconds(),
-                 now = get_clock()->now().seconds();
+    const auto deadline = received + std::chrono::duration<double>(timeout_);
+    const rclcpp::Time image_stamp(msg->header.stamp);
+    const double stamp = image_stamp.seconds(), now = get_clock()->now().seconds();
     // Invalid, missing, duplicate, future or stale frames never provide
     // clearing evidence.
     bool previous_health = healthy_;
     healthy_ = false;
     status_ = "invalid_or_stale_observation";
     if (memory_failed_ || !info_ || stamp <= 0 || stamp <= last_stamp_ || now - stamp > timeout_ ||
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - received).count() >= timeout_ ||
+        observationExpired(deadline, now) ||
         info_->header.frame_id != msg->header.frame_id ||
         msg->header.frame_id.empty() ||
         info_->width != msg->width || info_->height != msg->height ||
@@ -245,13 +302,17 @@ private:
       status_ = "waiting_for_clock";
       return false;
     }
-    auto imu = alignedImu(stamp);
+    auto imu = alignedImu(image_stamp);
     if (require_imu_ && !imu) {
       healthy_ = previous_health;
       status_ = "waiting_for_synchronized_imu";
       return false;
     }
     bool managing_memory = false;
+    const auto reject_stale = [this] {
+      memory_.interruptFreeEvidence();
+      return true;
+    };
     try {
       cv::Mat depth_image;
       if (msg->encoding == "32FC1")
@@ -259,39 +320,40 @@ private:
       else if (msg->encoding == "16UC1")
         cv_bridge::toCvCopy(msg, "16UC1")
             ->image.convertTo(depth_image, CV_32FC1, .001);
-      else {
-        memory_.interruptFreeEvidence();
-        return true;
-      }
-      auto memory_from_camera = eigenTransform(
-          buffer_
-              .lookupTransform(memory_frame_, msg->header.frame_id,
-                               rclcpp::Time(msg->header.stamp),
-                               rclcpp::Duration::from_seconds(.08))
-              .transform);
-      auto base_from_camera = eigenTransform(
-          buffer_
-              .lookupTransform(base_frame_, msg->header.frame_id,
-                               rclcpp::Time(msg->header.stamp),
-                               rclcpp::Duration::from_seconds(.08))
-              .transform);
+      else
+        return reject_stale();
+      const auto camera_budget = rclcpp::Duration::from_seconds(.08);
+      const auto memory_tf = lookupObservationTransform(
+          memory_frame_, msg->header.frame_id, image_stamp, camera_budget, deadline);
+      if (!memory_tf)
+        return reject_stale();
+      const auto base_tf = lookupObservationTransform(
+          base_frame_, msg->header.frame_id, image_stamp, camera_budget, deadline);
+      if (!base_tf)
+        return reject_stale();
+      auto memory_from_camera = eigenTransform(memory_tf->transform);
+      const auto base_from_camera = eigenTransform(base_tf->transform);
       auto memory_from_base = memory_from_camera * base_from_camera.inverse();
       Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
       if (imu) {
         const auto &q = imu->orientation;
         Eigen::Quaterniond world_from_imu(q.w, q.x, q.y, q.z);
         if (world_from_imu.coeffs().allFinite() && world_from_imu.norm() > .5) {
-          auto base_from_imu = eigenTransform(
-              buffer_
-                  .lookupTransform(base_frame_, imu->header.frame_id,
-                                   rclcpp::Time(imu->header.stamp),
-                                   rclcpp::Duration::from_seconds(.03))
-                  .transform);
+          // The IMU orientation is interpolated to the exact image stamp.
+          const auto imu_tf = lookupObservationTransform(
+              base_frame_, imu->header.frame_id, image_stamp,
+              rclcpp::Duration::from_seconds(.03), deadline);
+          if (!imu_tf)
+            return reject_stale();
+          const auto base_from_imu = eigenTransform(imu_tf->transform);
           up = base_from_imu.linear() *
                (world_from_imu.normalized().conjugate() *
                 Eigen::Vector3d::UnitZ());
         }
       }
+      const double after_tf = get_clock()->now().seconds();
+      if (observationExpired(deadline, after_tf) || stamp > after_tf || after_tf - stamp > timeout_)
+        return reject_stale();
       // Correct only the tilt missing from the supplied odom/TF chain. When TF
       // already includes roll/pitch this rotation is identity, not double
       // compensation.
@@ -397,16 +459,20 @@ private:
     // Retry on clock progress even when no new camera or IMU sample arrives.
     // The original receipt deadline is preserved across every retry.
     retryPendingDepth();
+    // /clock can rewind while that retry waits for TF. Reset before this
+    // snapshot so previous-session memory never carries a new-session stamp;
+    // the snapshot uses the clock sample this check validated.
+    const rclcpp::Time now = checkSession();
     omm_perception_msgs::msg::ObstacleMemory msg;
-    msg.header.stamp = get_clock()->now();
+    msg.header.stamp = now;
     msg.header.frame_id = memory_frame_;
     msg.observation_stamp = last_observation_;
-    const double age = get_clock()->now().seconds() - last_stamp_;
+    const double age = now.seconds() - last_stamp_;
     msg.sensor_healthy = healthy_ && age >= 0 && age < timeout_;
     msg.geometry_healthy = geometry_healthy_;
     msg.memory_healthy = memory_healthy_;
     msg.status = status_;
-    msg.voxel_size = get_parameter("voxel_size").as_double();
+    msg.voxel_size = voxel_size_;
     msg.cleared_voxels_total = memory_.cleared();
     std::vector<Eigen::Vector3d> points;
     points.reserve(memory_.voxels().size());
@@ -433,7 +499,7 @@ private:
         break;
       }
     }
-    auto dynamic = tracker_.dynamicPoints(get_clock()->now().seconds());
+    auto dynamic = tracker_.dynamicPoints(now.seconds());
     if (age >= 0 && age < .3)
       dynamic.insert(dynamic.end(), isolated_points_.begin(),
                      isolated_points_.end());
@@ -513,6 +579,7 @@ private:
     }
   }
   GroundPlane last_floor_;
+  const double voxel_size_;
   Memory memory_;
   Tracker tracker_;
   std::vector<Eigen::Vector3d> isolated_points_;

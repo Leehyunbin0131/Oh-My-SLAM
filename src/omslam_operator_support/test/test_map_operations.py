@@ -209,3 +209,42 @@ def test_stationary_amcl_requires_measurement_after_requested_pose(monkeypatch):
     support.nomotion_client = SimpleNamespace(service_is_ready=lambda: True, call_async=request_update)
     MapSupport.wait_initial_pose(support, 'new', 100, 20.)
     assert len(updates) == 1
+
+
+@pytest.mark.parametrize('reply', ['unanswered', 'complete', 'answered', 'rejected'])
+def test_service_call_drops_only_unanswered_requests_from_long_lived_client(reply):
+    from rclpy.task import Future
+    from std_srvs.srv import Trigger
+
+    class Client:
+        def __init__(self):
+            self.calls, self.pending, self.removed = [], [], []
+
+        def wait_for_service(self, timeout_sec):
+            return True
+
+        def call_async(self, request):
+            future = Future()
+            self.calls.append(future)
+            self.pending.append(future)
+            response = Trigger.Response(success=reply != 'rejected', message='guard rejected')
+            if reply == 'complete':
+                future.set_result(response)
+            elif reply != 'unanswered':
+                threading.Timer(.02, future.set_result, (response,)).start()
+            return future
+
+        def remove_pending_request(self, future):
+            self.removed.append(future)
+            self.pending.remove(future)
+
+    client = Client()
+    if reply in ('unanswered', 'rejected'):
+        with pytest.raises(RuntimeError, match='응답 시간 초과' if reply == 'unanswered' else 'guard rejected'):
+            MapSupport.call(SimpleNamespace(), client, Trigger.Request(), timeout=.2)
+    else:
+        assert MapSupport.call(SimpleNamespace(), client, Trigger.Request(), timeout=.2).success
+    if reply == 'unanswered':
+        assert client.removed == client.calls and client.pending == []
+    else:
+        assert client.removed == [] and client.pending == client.calls and client.calls[0].done()

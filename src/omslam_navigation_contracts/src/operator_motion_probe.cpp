@@ -55,6 +55,18 @@ void run_probe()
   std::fill_n(grid->getCharMap(), 160 * 160, nav2_costmap_2d::FREE_SPACE);
   pluginlib::ClassLoader<nav2_core::GoalChecker> goals("nav2_core", "nav2_core::GoalChecker");
   pluginlib::ClassLoader<nav2_core::ProgressChecker> checks("nav2_core", "nav2_core::ProgressChecker");
+  {
+    auto expired = checks.createSharedInstance("omslam_navigation::SpeedAwareProgressChecker");
+    bool rejected = false;
+    try {
+      expired->initialize(rclcpp_lifecycle::LifecycleNode::WeakPtr{}, "expired_progress_checker");
+    } catch (const std::runtime_error & error) {
+      const std::string message = error.what();
+      rejected = message.find("SpeedAwareProgressChecker") != std::string::npos &&
+        message.find("expired_progress_checker") != std::string::npos;
+    }
+    require(rejected, "expired progress-checker parent did not produce the expected error");
+  }
   auto goal = goals.createSharedInstance(parent->get_parameter("goal_checker.plugin").as_string());
   auto progress = checks.createSharedInstance(parent->get_parameter("progress_checker.plugin").as_string());
   goal->initialize(parent, "goal_checker", cm);

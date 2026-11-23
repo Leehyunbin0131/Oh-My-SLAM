@@ -9,12 +9,13 @@ import time
 import uuid
 from types import SimpleNamespace
 from collections import deque
+from collections.abc import Mapping
 
 import numpy as np
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
@@ -41,8 +42,16 @@ def stamp_seconds(stamp):
     return stamp.sec+stamp.nanosec*1e-9
 
 
+def _plain_value(value):
+    if isinstance(value, Mapping):
+        return {key: _plain_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_value(item) for item in value]
+    return value
+
+
 def plain(message):
-    return json.loads(json.dumps(message_to_ordereddict(message)))
+    return _plain_value(message_to_ordereddict(message))
 
 
 class Shared:
@@ -133,6 +142,8 @@ class RosWorker(threading.Thread):
                 # callbacks so the UI thread can sample fresh operator intent.
                 # This never manufactures or repeats a heartbeat in the worker.
                 time.sleep(0)
+        except ExternalShutdownException:
+            pass
         except Exception as exc:
             self.shared.event('ROS 연결 오류: '+str(exc))
         finally:
@@ -210,6 +221,11 @@ class ConsoleNode(Node):
         self.keepouts_client=self.create_client(SetKeepoutZones,self.topic('/operator/set_keepouts'))
         self.navigate=ActionClient(self,OperatorNavigate,self.topic('/operator/navigate'))
         self.create_timer(.02,self.pump,clock=rclpy.clock.Clock(clock_type=rclpy.clock.ClockType.STEADY_TIME))
+
+    def destroy_node(self):
+        if self.navigate in self.waitables:
+            self.navigate.destroy()
+        return super().destroy_node()
 
     def topic(self,name):
         ns=self.get_namespace().rstrip('/')
@@ -783,8 +799,8 @@ class ConsoleNode(Node):
         if now-self.last_history>.1:
             self.last_history=now
             try:
-                tr=self.tf.lookup_transform('map','base_footprint',Time()).transform
                 stamped=self.tf.lookup_transform('map','base_footprint',Time())
+                tr=stamped.transform
                 valid=abs(ros.nanoseconds*1e-9-stamp_seconds(stamped.header.stamp))<.5
                 rpy=quaternion_rpy(tr.rotation)
                 pose=[tr.translation.x,tr.translation.y,rpy[2]] if valid and rpy else None

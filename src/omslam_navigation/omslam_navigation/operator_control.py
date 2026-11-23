@@ -70,6 +70,11 @@ class OperatorControl:
                                    execute_callback=self.execute_goal, goal_callback=self.accept_goal,
                                    cancel_callback=self.cancel_goal, callback_group=self.group)
 
+    def destroy(self):
+        for endpoint in (self.action, self.nav_client):
+            if endpoint in self.node.waitables:
+                endpoint.destroy()
+
     def authorized(self, token, epoch):
         return self.core.authorized(token, epoch, self.node.now_ns(), time.monotonic())
 

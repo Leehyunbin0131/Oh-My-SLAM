@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 
 #include "angles/angles.h"
@@ -53,11 +54,15 @@ public:
   void initialize(
     const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent, const std::string & name) override
   {
+    auto node = parent.lock();
+    if (!node) {
+      throw std::runtime_error("SpeedAwareProgressChecker '" + name + "' requires a live parent node");
+    }
     PoseProgressChecker::initialize(parent, name);
     using State = omslam_operator_msgs::msg::OperatorState;
     // The server republishes its accepted limits at 10 Hz and retains the
     // most recent one for a controller that was configured or restarted later.
-    subscription_ = parent.lock()->create_subscription<State>(
+    subscription_ = node->create_subscription<State>(
       "/operator/state", rclcpp::QoS(1).transient_local(),
       [this](State::ConstSharedPtr state) {
         const double fraction = state->speed_percent / 100.0;

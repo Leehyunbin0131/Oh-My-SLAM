@@ -774,6 +774,11 @@ class NavigationGuard(Node):
             self.get_logger().error('Readiness deadline exceeded: ' + '; '.join(self.missing))
         self.report(wall)
 
+    def destroy_node(self):
+        if self.operator is not None:
+            self.operator.destroy()
+        return super().destroy_node()
+
 
 def main(args=None):
     # rclpy's asynchronous signal handler can invalidate the context while a

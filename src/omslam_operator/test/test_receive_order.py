@@ -3,13 +3,17 @@ from types import SimpleNamespace
 
 import pytest
 import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
 from rclpy.time import Time
 from PySide6.QtCore import QCoreApplication
+from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from omslam_operator_msgs.msg import OperatorState
+from omslam_operator import worker
 from omslam_operator.live_model import LiveConsoleModel
-from omslam_operator.worker import ConsoleNode, Shared
+from omslam_operator.worker import ConsoleNode, RosWorker, Shared
 
 
 @pytest.fixture
@@ -124,3 +128,63 @@ def test_wall_clock_host_diagnostics_are_not_deferred_by_sim_time(receiver):
     f.model.refresh()
     assert f.model.ui['hostCpu'] == '23%'
     assert '/diagnostics' not in f.node.pending_samples
+
+
+def test_history_tick_uses_one_transform_for_pose_and_freshness(receiver, monkeypatch):
+    f = receiver
+    looked_up = []
+    transforms = []
+    # At 10 s, the first pose is fresh and the second is at the stale boundary.
+    for seconds, x in ((9.75, 1.25), (9.5, 99.), (9.99, 123.)):
+        sample = TransformStamped()
+        sample.header.stamp = Time(seconds=seconds).to_msg()
+        sample.transform.translation.x = x
+        sample.transform.translation.y = -2.
+        sample.transform.rotation.w = 1.
+        transforms.append(sample)
+
+    def lookup(target, source, stamp):
+        looked_up.append((target, source, stamp.nanoseconds))
+        return transforms[len(looked_up) - 1]
+
+    monkeypatch.setattr(f.node.tf, 'lookup_transform', lookup)
+    f.node.pump()
+    assert looked_up == [('map', 'base_footprint', 0)]
+    assert f.shared.data['pose'] == [1.25, -2., 0.]
+    assert f.shared.data['pose_received'] == f.wall[0]
+    f.wall[0] += .11
+    f.node.pump()
+    assert looked_up == [('map', 'base_footprint', 0)] * 2
+    assert f.shared.data['pose'] is None
+    assert f.shared.data['pose_received'] == 0.
+
+
+def test_worker_external_shutdown_has_no_error_and_destroys_action_client(receiver, monkeypatch):
+    f = receiver
+    calls = []
+
+    def interrupted(timeout_sec):
+        assert timeout_sec == .02
+        raise ExternalShutdownException()
+
+    destroy = f.node.navigate.destroy
+
+    def destroy_client():
+        calls.append('client')
+        destroy()
+
+    def destroy_base(node):
+        assert node.navigate not in node.waitables
+        calls.append('node')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(worker, 'ConsoleNode', lambda *_: f.node)
+        patch.setattr(worker, 'SingleThreadedExecutor', lambda **_: SimpleNamespace(
+            add_node=lambda node: None, spin_once=interrupted,
+            shutdown=lambda: calls.append('executor')))
+        patch.setattr(f.node.navigate, 'destroy', destroy_client)
+        patch.setattr(Node, 'destroy_node', destroy_base)
+        RosWorker(f.shared).run()
+    assert calls == ['executor', 'client', 'node']
+    assert f.shared.node is None
+    assert f.shared.data['events'] == []

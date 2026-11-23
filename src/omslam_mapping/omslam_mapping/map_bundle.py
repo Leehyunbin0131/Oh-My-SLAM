@@ -13,6 +13,7 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.parameter import parameter_value_to_python
 from rclpy.parameter_client import AsyncParameterClient
 from slam_toolbox.srv import DeserializePoseGraph, SerializePoseGraph
@@ -221,11 +222,17 @@ def _run(parser, operation, argv):
     rclpy.init(args=[])
     try:
         operation(args)
+    except ExternalShutdownException:
+        # The staged bundle was rolled back and its reservation released.
+        print(f'{parser.prog}: interrupted: ROS shut down before the operation completed',
+              file=sys.stderr)
+        return 1
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError, KeyError) as exc:
         print(f'{parser.prog}: {exc}', file=sys.stderr)
         return 1
     finally:
-        rclpy.shutdown()
+        # A signal or another owner may already have shut the context down.
+        rclpy.try_shutdown()
     return 0
 
 

@@ -293,7 +293,10 @@ class MapSupport(Node):
         future = client.call_async(request)
         done = threading.Event()
         future.add_done_callback(lambda _: done.set())
-        if not done.wait(timeout):
+        if not (future.done() or done.wait(timeout) or future.done()):
+            # This client is long-lived: drop the unanswered request so a
+            # late response is ignored and pending futures do not accumulate.
+            client.remove_pending_request(future)
             raise RuntimeError('로봇 응답 시간 초과. 정지 여부를 확인할 수 없습니다.')
         result = future.result()
         if not result.success:

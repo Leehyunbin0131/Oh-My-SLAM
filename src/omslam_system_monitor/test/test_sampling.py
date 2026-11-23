@@ -51,3 +51,29 @@ def test_unavailable_reset_and_counter_rollbacks_never_become_zero_measurements(
     assert 'interface.eth0.tx_bytes_per_s' not in result['network'].values
     (proc/'net'/'dev').unlink()
     assert not monitor.network(3.).valid and monitor.previous_network is None
+
+
+
+def test_main_exits_cleanly_when_the_context_is_shut_down_externally(monkeypatch):
+    import rclpy
+    from rclpy.executors import ExternalShutdownException
+    from omslam_system_monitor import node as monitor
+
+    monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'OFF')
+    events = []
+
+    class Monitor(monitor.SystemMonitor):
+        def destroy_node(self):
+            events.append(('destroyed', self.context.ok()))
+            return super().destroy_node()
+
+    def spin(node):
+        # Another owner shut down the context while spin() was waiting.
+        node.context.try_shutdown()
+        events.append('spin')
+        raise ExternalShutdownException()
+
+    monkeypatch.setattr(monitor, 'SystemMonitor', Monitor)
+    monkeypatch.setattr(monitor.rclpy, 'spin', spin)
+    assert monitor.main([]) is None
+    assert events == ['spin', ('destroyed', False)] and not rclpy.ok()

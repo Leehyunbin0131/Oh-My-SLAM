@@ -1,17 +1,19 @@
 """Opt-in read-only HFI-A9 gyro source; no configuration commands or reconnect."""
 import math
 import time
-import rclpy
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from omslam_base.runner import spin_node
 from omslam_base.vendor import load_control_module
 
 
 class HfiA9(Node):
-    def __init__(self):
-        super().__init__('hfi_a9')
+    def __init__(self, **kwargs):
+        super().__init__('hfi_a9', **kwargs)
+        self.port = None
         for key, value in {'port': '', 'baud': 921600, 'frame_id': 'imu_link',
                            'mounting_verified': False, 'gyro_variance': [1e-4, 1e-4, 1e-4]}.items():
             self.declare_parameter(key, value)
@@ -29,16 +31,28 @@ class HfiA9(Node):
         self.decoder = load_control_module('hfi_a9').A9Decoder()
         import serial
         self.port = serial.Serial(port, int(self.get_parameter('baud').value), timeout=0, exclusive=True)
-        self.port.reset_input_buffer()
-        self.publisher = self.create_publisher(Imu, '/imu/raw', qos_profile_sensor_data)
-        self.diagnostics = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
-        self.previous_tick = None
-        self.last_received = None
-        self.failed = False
-        self.reason = 'Waiting for motion frames'
-        self.create_timer(.005, self.receive)
-        self.create_timer(1., self.report)
-        self.get_logger().warn('Gyro source uses host receive time; device tick units/latency are not calibrated. Mounting must match imu_link TF.')
+        try:
+            self.port.reset_input_buffer()
+            self.publisher = self.create_publisher(Imu, '/imu/raw', qos_profile_sensor_data)
+            self.diagnostics = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
+            self.previous_tick = None
+            self.last_received = None
+            self.failed = False
+            self.reason = 'Waiting for motion frames'
+            # Physical polling and health use steady time; stamps use the node clock.
+            steady = Clock(clock_type=ClockType.STEADY_TIME)
+            self.create_timer(.005, self.receive, clock=steady)
+            self.create_timer(1., self.report, clock=steady)
+            self.get_logger().warn('Gyro source uses host receive time; device tick units/latency are not calibrated. Mounting must match imu_link TF.')
+        except BaseException:
+            self.close_port()
+            raise
+
+    def close_port(self):
+        # Receive failure and node teardown may both release the device.
+        port, self.port = self.port, None
+        if port is not None:
+            port.close()
 
     def receive(self):
         if self.failed: return
@@ -76,7 +90,7 @@ class HfiA9(Node):
         except Exception as exc:
             self.failed = True
             self.reason = str(exc)
-            self.port.close()
+            self.close_port()
             self.get_logger().error(self.reason)
 
     def report(self):
@@ -90,15 +104,9 @@ class HfiA9(Node):
         self.diagnostics.publish(msg)
 
     def destroy_node(self):
-        self.port.close()
+        self.close_port()
         return super().destroy_node()
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = HfiA9()
-    try: rclpy.spin(node)
-    except KeyboardInterrupt: pass
-    finally:
-        node.destroy_node()
-        if rclpy.ok(): rclpy.shutdown()
+    spin_node(HfiA9, args=args)

@@ -1,16 +1,17 @@
 """Validate fresh IMU measurements and subtract sensor-frame gyro bias."""
 import time
-import rclpy
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from omslam_base.runner import spin_node
 from .conditioning import Conditioner, load_bias
 
 
 class ImuConditioner(Node):
-    def __init__(self):
-        super().__init__('imu_conditioner')
+    def __init__(self, **kwargs):
+        super().__init__('imu_conditioner', **kwargs)
         defaults = {'expected_frame': 'imu_link', 'gyro_bias_rad_s': [0., 0., 0.],
                     'fallback_gyro_variance': [1e-4, 1e-4, 1e-4], 'max_age_s': .2,
                     'future_tolerance_s': .02, 'calibration_file': '', 'expected_identity': ''}
@@ -29,7 +30,9 @@ class ImuConditioner(Node):
         self.last_received = None
         self.reason = 'No accepted IMU measurement'
         self.accepted = self.rejected = 0
-        self.create_timer(1., self.report)
+        # Report absence while /clock is paused. Acceptance and published
+        # stamps stay on node time; receipt age stays monotonic.
+        self.create_timer(1., self.report, clock=Clock(clock_type=ClockType.STEADY_TIME))
 
     def receive(self, msg):
         try:
@@ -56,12 +59,4 @@ class ImuConditioner(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ImuConditioner()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        if rclpy.ok(): rclpy.shutdown()
+    spin_node(ImuConditioner, args=args)

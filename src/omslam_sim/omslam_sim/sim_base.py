@@ -34,6 +34,7 @@ class SimBase(LifecycleNode):
                            'clock_stall_timeout': .3}.items():
             self.declare_parameter(key, value)
         self.configured = False
+        self.wheel_vx_variance = self.wheel_wz_variance = None
         self.guard = SimCommandGuard()
         self.output_moving = False
         self.last_odom_stamp = None
@@ -70,10 +71,12 @@ class SimBase(LifecycleNode):
                 raise ValueError('sim_base requires use_sim_time=true')
             geometry = Geometry(left_radius=self.val('left_radius'), right_radius=self.val('right_radius'),
                                 separation=self.val('wheel_separation'), max_rpm=self.val('max_rpm'))
-            if not all(math.isfinite(self.val(k)) and self.val(k) > 0 for k in
-                       ('clock_stall_timeout', 'wheel_vx_variance', 'wheel_wz_variance')):
+            stall, vx_variance, wz_variance = (self.val(k) for k in
+                                               ('clock_stall_timeout', 'wheel_vx_variance', 'wheel_wz_variance'))
+            if not all(math.isfinite(v) and v > 0 for v in (stall, vx_variance, wz_variance)):
                 raise ValueError('Positive finite watchdog and covariance values required')
-            self.guard = SimCommandGuard(geometry, self.val('clock_stall_timeout'))
+            self.guard = SimCommandGuard(geometry, stall)
+            self.wheel_vx_variance, self.wheel_wz_variance = float(vx_variance), float(wz_variance)
             if self.latest_clock is not None:
                 self.guard.clock(self.latest_clock, self.clock_advanced_at)
             self.last_odom_stamp = self.last_odom_at = None
@@ -153,8 +156,8 @@ class SimBase(LifecycleNode):
         output.twist.covariance = [0.]*36
         for i in (0, 7, 14, 21, 28, 35): output.pose.covariance[i] = 1e3
         for i in (7, 14, 21, 28): output.twist.covariance[i] = 1e3
-        output.twist.covariance[0] = self.val('wheel_vx_variance')
-        output.twist.covariance[35] = self.val('wheel_wz_variance')
+        output.twist.covariance[0] = self.wheel_vx_variance
+        output.twist.covariance[35] = self.wheel_wz_variance
         self.last_odom_stamp = ns; self.last_odom_at = time.monotonic()
         self.wheel.publish(output)
 

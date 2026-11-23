@@ -2,8 +2,11 @@
 from collections import OrderedDict, deque
 from types import SimpleNamespace
 
+import pytest
+import rclpy
 from geometry_msgs.msg import TransformStamped, TwistStamped
 from rclpy.duration import Duration
+from rclpy.node import Node
 from rclpy.time import Time
 from rosgraph_msgs.msg import Clock
 from tf2_ros import Buffer
@@ -12,6 +15,39 @@ from omslam_base.core import CommandGate
 from omslam_navigation.guard_core import NavigationGate
 from omslam_navigation.navigation_guard import NavigationGuard, stamp_ns
 from omslam_navigation.operator_core import OperatorGate
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_guard_destroys_operator_actions_before_node(monkeypatch, enabled):
+    rclpy.init(args=['--ros-args', '-p', 'use_sim_time:=true', '-p',
+                     f'operator_enabled:={str(enabled).lower()}'], domain_id=222)
+    calls = []
+    try:
+        guard = NavigationGuard()
+        assert (guard.operator is not None) == enabled
+        endpoints = ((guard.operator.action, guard.operator.nav_client) if enabled else ())
+        for name, endpoint in zip(('server', 'client'), endpoints):
+            destroy = endpoint.destroy
+
+            def destroy_action(name=name, destroy=destroy):
+                calls.append(name)
+                destroy()
+
+            monkeypatch.setattr(endpoint, 'destroy', destroy_action)
+        destroy_node = Node.destroy_node
+
+        def destroy_base(node):
+            assert all(endpoint not in node.waitables for endpoint in endpoints)
+            calls.append('node')
+            return destroy_node(node)
+
+        monkeypatch.setattr(Node, 'destroy_node', destroy_base)
+        guard.destroy_node()
+        if enabled:
+            guard.operator.destroy()
+        assert calls == (['server', 'client', 'node'] if enabled else ['node'])
+    finally:
+        rclpy.try_shutdown()
 
 
 def command(stamp, velocity):
