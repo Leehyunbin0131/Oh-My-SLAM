@@ -2,7 +2,7 @@
 planner_server:
   ros__parameters:
     GridBased:
-      # Stock Smac approximate-goal search fallback. Keep it inside the 8 cm
+      # Stock Smac approximate-goal search fallback. Keep it inside the 5 cm
       # goal-checker circle; it is not a terminal arrival tolerance.
       tolerance: 0.04
       # Include the observed 3.05 m corridor approach in the collision- and
@@ -21,7 +21,7 @@ controller_server:
       movement_time_allowance: 10.0
     goal_checker:
       # Launch also supplies these XY/translation thresholds to DWB.
-      xy_goal_tolerance: 0.08
+      xy_goal_tolerance: 0.05
       yaw_goal_tolerance: 0.15
       trans_stopped_velocity: 0.01
       rot_stopped_velocity: 0.02

@@ -177,7 +177,8 @@ def validate_configuration(configuration, share):
     _required_equal(planner['GridBased']['allow_unknown'], False, 'allow_unknown')
     _required_equal(planner['GridBased']['allow_reverse_expansion'], False, 'allow_reverse_expansion')
     for name in UNSUPPORTED_PLANNER_PARAMETERS:
-        if name in planner['GridBased']:
+        # ROS parameter YAML accepts both the nested and the flat dotted spelling.
+        if name in planner['GridBased'] or f'GridBased.{name}' in planner:
             raise ValueError(f'GridBased.{name} is not a stock Jazzy Smac Lattice parameter')
     _required_equal(controller['controller_plugins'], ['FollowPath'], 'controller_plugins')
     _required_equal(controller['goal_checker_plugins'], ['goal_checker'], 'goal_checker_plugins')
@@ -227,6 +228,9 @@ def validate_configuration(configuration, share):
     _required_equal(behavior['behavior_plugins'], ['wait'], 'behavior_plugins')
     _required_equal(behavior['wait']['plugin'], 'nav2_behaviors::Wait', 'wait behavior')
     _required_equal(bt['navigators'], ['navigate_to_pose'], 'navigators')
+    # BT GoalReached radius for reusing a valid terminal path; arrival itself
+    # remains the goal checker's XY circle, which must lie inside it.
+    _number(bt['goal_reached_tol'], 'bt_navigator.goal_reached_tol', xy_tolerance)
     _required_equal(lifecycle['node_names'], NAVIGATION_NODES, 'lifecycle activation order')
     _required_equal(lifecycle['attempt_respawn_reconnection'], False, 'automatic reconnection')
     _required_equal(lifecycle['autostart'], True, 'Nav2 lifecycle autostart')
@@ -305,9 +309,11 @@ def validate_configuration(configuration, share):
     recovery = tree.findall('.//RecoveryNode')
     if len(recovery) != 1 or recovery[0].get('number_of_retries') != '1':
         raise ValueError('The navigation BT must have exactly one retry budget of one')
-    for tag in ['ComputePathToPose', 'FollowPath', 'CancelControl', 'Wait']:
+    for tag in ['ComputePathToPose', 'FollowPath', 'CancelControl', 'Wait',
+                'GlobalUpdatedGoal', 'GoalReached', 'IsPathValid', 'UnsetBlackboard']:
         if len(tree.findall('.//' + tag)) != 1:
             raise ValueError(f'The bounded navigation BT requires one {tag}')
+    _required_equal(tree.find('.//UnsetBlackboard').get('key'), 'path', 'retry path reset')
     if any(tree.findall('.//' + tag) for tag in ['Spin', 'BackUp', 'ClearEntireCostmap', 'RetryUntilSuccessful']):
         raise ValueError('Unbounded or excluded recovery nodes are not supported')
     _required_equal(tree.find('.//Wait').get('wait_duration'), '2.0', 'recovery wait')

@@ -429,6 +429,33 @@ def test_numeric_rpm_maps_to_authorized_speed_request(model):
     assert len(commands(model,'speed'))==1
 
 
+# Simulation profile: 70 RPM on 0.068 m wheels. max * 70 / 70 rounds above max.
+SIM_MAX_LINEAR = 0.49846603436958054
+SIM_MAX_RPM = 70.0
+
+
+@pytest.mark.parametrize('rpm', [1., 17.5, 35., 70.])
+def test_numeric_rpm_reaches_the_exact_simulation_cap(model, rpm):
+    model.s.data['operator'].update(max_linear_velocity=SIM_MAX_LINEAR, linear_limit=SIM_MAX_LINEAR / 2,
+                                    max_angular_velocity=.5, max_wheel_rpm=SIM_MAX_RPM,
+                                    wheel_rpm_limit=SIM_MAX_RPM / 2)
+    own(model, 'DISABLED')
+    model.setRpmLimit(rpm)
+    requests = commands(model, 'speed')
+    assert len(requests) == 1
+    request = requests[0]
+    # The same bounds operator_control.speed() enforces on the service request.
+    assert 0 < request['linear_limit'] <= SIM_MAX_LINEAR
+    assert 0 < request['angular_limit'] <= .5
+    assert 1. <= request['speed_percent'] <= 100.
+    assert 1. <= request['wheel_rpm_limit'] <= SIM_MAX_RPM
+    assert abs(request['wheel_rpm_limit'] / SIM_MAX_RPM * 100. - request['speed_percent']) < 1e-6
+    assert request['wheel_rpm_limit'] == pytest.approx(rpm)
+    assert request['linear_limit'] == pytest.approx(SIM_MAX_LINEAR * rpm / SIM_MAX_RPM)
+    if rpm == SIM_MAX_RPM:
+        assert request['linear_limit'] == SIM_MAX_LINEAR and request['speed_percent'] == 100.
+
+
 def test_keepout_edit_waits_for_disabled_owner_and_server_snapshot(model):
     model.addKeepout(.2,.2,.8,.9)
     assert commands(model,'control')[0]['command']=='acquire'

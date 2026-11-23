@@ -637,7 +637,9 @@ class LiveConsoleModel(ConsoleModel):
         if not math.isfinite(rpm) or not 1. <= rpm <= maximum:
             self._event('RPM을 1 이상 서버 최대 RPM 이하로 입력하세요')
             return
-        self.setSpeedLimit(float(self._control_state['max_linear_velocity']) * rpm / maximum)
+        # Scale by the ratio first: rpm == maximum gives exactly 1.0, so the
+        # top of the range is never rounded above max_linear_velocity.
+        self.setSpeedLimit(float(self._control_state['max_linear_velocity']) * (rpm / maximum))
 
     def _apply_speed(self):
         if not self._speed_dirty or self._speed_request or self._request or not self._owned():

@@ -27,7 +27,7 @@ cd ~/MyRos/Oh_My_SLAM
 | --- | --- |
 | 전역 계획 | `nav2_smac_planner::SmacPlannerLattice`, diff·0.05 m·16 heading·112 primitives |
 | 지역 제어 | `dwb_core::DWBLocalPlanner`, 전진·제자리 회전, `ObstacleFootprint` 검사 |
-| 도착 판정 | `StoppedGoalChecker`, 위치 0.08 m·yaw 0.15 rad 이내와 측정 속도 0.01 m/s·0.02 rad/s 이하를 함께 확인 |
+| 도착 판정 | `StoppedGoalChecker`, 위치 0.05 m·yaw 0.15 rad 이내와 측정 속도 0.01 m/s·0.02 rad/s 이하를 함께 확인 |
 | 비용지도 | 전역 static→lidar→camera memory→inflation, 지역 lidar→camera memory→inflation |
 | 인지 | depth·CameraInfo·유효 IMU 자세로 바닥 분리, `odom` 기준 장애물 기억 |
 | 명령 | `/cmd_vel/nav`→guard→`/cmd_vel/requested`→smoother→`/cmd_vel/smoothed`→monitor→`/cmd_vel/monitored`→guard→`/cmd_vel`→sim base |
@@ -36,9 +36,11 @@ cd ~/MyRos/Oh_My_SLAM
 
 공통 설정은 `config/nav2_common.yaml`, 시뮬레이션 속도·시간 값은 `config/sim_profile.yaml`, 인지는 `config/perception.yaml`에 있습니다. launch가 설치된 설정을 병합하고 lattice·BT의 절대 설치 경로를 넣습니다. `nav2_params_file`은 이 기본 설정에 병합할 override이며 플러그인·기하·시간 계약을 깨는 값은 시작 시 거부합니다. SLAM/AMCL 설정은 별도의 `backend_params_file`로 전달합니다.
 
-목표 접근과 방향 정렬의 위치 기준은 `controller_server.goal_checker.xy_goal_tolerance` 한 곳에서 설정합니다. launch가 같은 값을 `GridBased.xy_goal_tolerance`와 `FollowPath.xy_goal_tolerance`에 전달하고, `goal_checker.trans_stopped_velocity`도 DWB에 전달합니다. 기본 위치 범위는 10 cm이며 이 안에서는 전역계획기가 원래 목표 좌표·방향을 유지한 짧은 마무리 경로를 반환합니다. 현재 위치의 제자리 회전과 목표까지의 연결 구간 전체를 footprint로 검사하고, 충돌하면 계획 실패를 반환합니다. 범위 밖은 기존 Lattice 탐색을 사용하되 경로 끝점을 원래 목표에 맞추고 짧은 연결 구간을 검사합니다. 연결 길이는 위치 허용오차와 격자 한 셀의 대각선 길이 중 큰 값으로 제한합니다. `GridBased.tolerance`는 A* 탐색의 fallback 허용값으로 별도 의미를 가집니다.
+목표 접근과 방향 정렬의 위치 기준은 `controller_server.goal_checker.xy_goal_tolerance` 한 곳에서 설정합니다. launch가 같은 값을 `FollowPath.xy_goal_tolerance`에 전달하고, `goal_checker.trans_stopped_velocity`도 DWB에 전달합니다. 기본 위치 범위는 5 cm입니다. stock Jazzy Smac Lattice에는 종단 위치 허용값 매개변수가 없으므로 `GridBased.xy_goal_tolerance`는 중첩 표기와 점 표기 모두 시작 시 거부합니다. `GridBased.tolerance`(4 cm)는 A* 탐색의 fallback 허용값으로 별도 의미를 가집니다.
 
-위치 범위에 진입해도 즉시 성공하지 않습니다. DWB가 감속·방향 정렬을 수행하는 동안에도 매 주기 목표까지의 거리를 다시 검사합니다. 정렬 중에 중심이 10 cm 밖으로 밀리면 다시 접근하고, 위치·방향·측정 속도가 동시에 허용 범위에 들면 완료합니다. 이 기준을 변경하려면 도착 판정 설정을 수정하고 세션을 다시 시작합니다. GUI에서 목표가 완료·취소·실패하면 진행 경로 표시를 지우고 이전 경로의 지연 수신을 무시합니다.
+BT는 목표에서 `bt_navigator.goal_reached_tol`(1.5 m)보다 멀면 1 Hz로 경로를 다시 계획합니다. 이 반경 안에서는 같은 목표의 기존 경로가 `IsPathValid`로 유효한 동안 재계획하지 않고 그 경로를 따라갑니다. 목표가 바뀌거나 경로가 막히면 다시 계획합니다. 이 반경은 재계획 여부만 정하며 도착 판정은 goal checker가 합니다. 복구는 정지·2초 대기 후 저장된 경로를 지우고 한 번만 새로 계획합니다.
+
+위치 범위에 진입해도 즉시 성공하지 않습니다. DWB가 감속·방향 정렬을 수행하는 동안에도 매 주기 목표까지의 거리를 다시 검사합니다. 정렬 중에 중심이 5 cm 밖으로 밀리면 다시 접근하고, 위치·방향·측정 속도가 동시에 허용 범위에 들면 완료합니다. 이 기준을 변경하려면 도착 판정 설정을 수정하고 세션을 다시 시작합니다. GUI에서 목표가 완료·취소·실패하면 진행 경로 표시를 지우고 이전 경로의 지연 수신을 무시합니다.
 
 콘솔에서 1·2 RPM처럼 낮은 속도를 지정하면 DWB가 이동 후보의 예측 시간을 늘립니다. 진행 감시기도 승인된 속도로 5초간 갈 수 있는 거리·회전량을 반영하며, 10초간 진행이 없으면 실패로 판정합니다.
 

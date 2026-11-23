@@ -41,6 +41,11 @@ ALL_CHECKS=[f'V4-{n:02d}' for n in range(1,15)]
 FIVE_GOAL_CHECKS=['installed_readiness','five_consecutive_goals','arrival_accuracy',
                   'collision_free','command_limits','normal_shutdown']
 
+# Simulation drive profile the cruise checks are specified against. The verifier
+# asserts it before deriving speeds instead of accepting any advertised cap.
+SIM_CAP_RPM=70.0
+SIM_GUARD_LIMITS={'max_linear_velocity':0.49846603436958054,'max_angular_velocity':0.50}
+
 SCENARIO_CHECKS = {
     'integrated': ALL_CHECKS,
     'five-goals': FIVE_GOAL_CHECKS,
@@ -879,13 +884,17 @@ class NavigationRun:
         request.pose.pose.position.x=float(goal[0]);request.pose.pose.position.y=float(goal[1])
         request.pose.pose.orientation.z=math.sin(goal[2]/2);request.pose.pose.orientation.w=math.cos(goal[2]/2)
         feedback=[]
+        # Fresh simulation-clock boundary taken just before sending: commands
+        # stamped at or after it belong to this goal, not a previous goal's tail.
+        self.until(lambda:time.monotonic()-self.drive_clock[1]<=.05,2.,'fresh simulation clock before '+label)
+        boundary=self.drive_clock[0]
         future=self.action.send_goal_async(request,feedback_callback=lambda msg:feedback.append({
             **self.now(),'distance':msg.feedback.distance_remaining,'recoveries':msg.feedback.number_of_recoveries}))
         self.until(future.done,8,'goal acceptance')
         handle=future.result()
         if not handle.accepted:raise AssertionError('NavigateToPose rejected '+label)
         ident=bytes(handle.goal_id.uuid).hex()
-        entry={'id':ident,'label':label,'goal':list(goal),'start':self.now(),'feedback':feedback}
+        entry={'id':ident,'label':label,'goal':list(goal),'start':self.now(),'clock_boundary':boundary,'feedback':feedback}
         self.goals.append(entry);self.current_goal=handle;self.current_future=handle.get_result_async();self.current_entry=entry
         self.event('goal_started',uuid=ident,target=goal,label=label)
         return self.current_future
@@ -933,6 +942,14 @@ class NavigationRun:
         self.initialize()
         cap = self.drive_geometry['max_rpm']
         radius = min(self.drive_geometry['left_radius'], self.drive_geometry['right_radius'])
+        # The 70 RPM cruise target is a specified profile, not whichever positive
+        # cap the running base advertises.
+        self.e.detail('cruise_profile', cap == SIM_CAP_RPM
+                      and all(self.drive_limits.get(name) == value for name, value in SIM_GUARD_LIMITS.items())
+                      and math.isclose(cap * radius * math.tau / 60., SIM_GUARD_LIMITS['max_linear_velocity'],
+                                       rel_tol=0., abs_tol=1e-12),
+                      expected_rpm=SIM_CAP_RPM, expected_limits=SIM_GUARD_LIMITS,
+                      geometry=self.drive_geometry, limits=self.drive_limits)
         publisher = self.node.create_publisher(SpeedLimit, '/speed_limit', 10)
         self.until(lambda: publisher.get_subscription_count() > 0, 5., 'speed limit subscriber')
         for label, rpm in [('maximum_speed_stop', cap), ('low_speed_stop', 10.)]:
@@ -981,18 +998,33 @@ class NavigationRun:
         for label, sign in [('left_turn', 1), ('right_turn', -1)]:
             self.stage = label
             pose = self.map_pose()
-            initial_yaw = self.pose()[2]
             self.send_goal([*pose[:2], pose[2] + sign * 1.2], label)
+            boundary = self.current_entry['clock_boundary']
             def first_command():
-                return next((row for row in self.command_events if row['stage'] == label
-                             and row['topic'] == '/cmd_vel/nav' and abs(row['velocity'][5]) > .005), None)
+                # Attribute by command header stamp, never by receipt or stage.
+                return next((row for row in self.command_events if row['topic'] == '/cmd_vel/nav'
+                             and row['stamp'] is not None and row['stamp'] >= boundary
+                             and abs(row['velocity'][5]) > .005), None)
             self.until(first_command, 8., 'first nonzero turn for ' + label)
-            angular = first_command()['velocity'][5]
-            self.wait_sim(.5)
-            delta = math.remainder(self.pose()[2] - initial_yaw, math.tau)
+            command = first_command()
+            angular = command['velocity'][5]
+            # Yaw change from stamped Gazebo truth: last sample at the boundary to
+            # the first sample 0.5 s of simulation after the first turn command.
+            measured_at = command['stamp'] + .5
+            self.until(lambda: self.trajectory and self.trajectory[-1]['stamp'] >= measured_at, 10.,
+                       'truth after first turn command for ' + label)
+            initial = next((row for row in reversed(self.trajectory) if row['stamp'] <= boundary), None)
+            final = next(row for row in self.trajectory if row['stamp'] >= measured_at)
+            delta = (math.remainder(final['world'][2] - initial['world'][2], math.tau)
+                     if initial is not None else None)
+            observed = (initial is not None and boundary - initial['stamp'] <= .1
+                        and final['stamp'] - measured_at <= .1)
             self.finish_goal()
-            self.e.check(label, angular * sign > 0 and delta * sign > 0,
-                         requested_yaw_delta=sign * 1.2, first_angular_command=angular, actual_yaw_delta=delta)
+            self.e.check(label, observed and angular * sign > 0 and delta * sign > 0,
+                         requested_yaw_delta=sign * 1.2, clock_boundary=boundary,
+                         first_command_stamp=command['stamp'], first_angular_command=angular,
+                         truth_start_stamp=initial['stamp'] if initial is not None else None,
+                         truth_end_stamp=final['stamp'], actual_yaw_delta=delta)
 
     def in_region(self,region,min_speed=.1):
         if self.current_future is not None and self.current_future.done():

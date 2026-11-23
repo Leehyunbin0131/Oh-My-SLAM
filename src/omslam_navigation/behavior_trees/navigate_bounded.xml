@@ -4,8 +4,20 @@
     <RecoveryNode number_of_retries="1" name="NavigateBounded">
       <PipelineSequence name="PlanAndFollow">
         <RateController hz="1.0">
-          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"
-                             error_code_id="{compute_path_error_code}"/>
+          <Fallback name="ReplanUnlessTerminalPathValid">
+            <!-- Inside bt_navigator.goal_reached_tol, keep the current terminal
+                 approach while it stays collision-free for the same goal.
+                 FollowPath and the goal checker still decide arrival. -->
+            <ReactiveSequence name="KeepTerminalPath">
+              <Inverter>
+                <GlobalUpdatedGoal/>
+              </Inverter>
+              <GoalReached goal="{goal}" robot_base_frame="base_footprint"/>
+              <IsPathValid path="{path}"/>
+            </ReactiveSequence>
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"
+                               error_code_id="{compute_path_error_code}"/>
+          </Fallback>
         </RateController>
         <FollowPath path="{path}" controller_id="FollowPath"
                     goal_checker_id="goal_checker" progress_checker_id="progress_checker"
@@ -14,6 +26,8 @@
       <Sequence name="StopWaitThenRetry">
         <CancelControl/>
         <Wait wait_duration="2.0"/>
+        <!-- The single retry always plans a fresh route. -->
+        <UnsetBlackboard key="path"/>
       </Sequence>
     </RecoveryNode>
   </BehaviorTree>

@@ -15,7 +15,7 @@ def test_goal_checker_thresholds_are_connected_to_dwb_and_independent_of_smac(tm
     override.write_text(yaml.safe_dump({'controller_server': {'ros__parameters': {
         'goal_checker': {'xy_goal_tolerance': .06, 'trans_stopped_velocity': .005},
     }}}))
-    for path, xy, stopped in [(None, .08, .01), (override, .06, .005)]:
+    for path, xy, stopped in [(None, .05, .01), (override, .06, .005)]:
         config = load_configuration(share, path)
         controller = config['controller_server']['ros__parameters']
         planner = config['planner_server']['ros__parameters']['GridBased']
@@ -30,20 +30,34 @@ def test_goal_checker_thresholds_are_connected_to_dwb_and_independent_of_smac(tm
         assert planner['tolerance'] < xy
         assert controller['goal_checker']['plugin'] == 'nav2_controller::StoppedGoalChecker'
         assert controller['goal_checker']['stateful'] is False
+        # Path reuse near the goal is wider than, and independent of, arrival.
+        assert config['bt_navigator']['ros__parameters']['goal_reached_tol'] == 1.5
 
 
-def test_fork_only_planner_tolerance_is_rejected(tmp_path):
+def _nested(planner):
+    planner['GridBased']['xy_goal_tolerance'] = .05
+
+
+def _flat(planner):
+    planner['GridBased.xy_goal_tolerance'] = .05
+
+
+@pytest.mark.parametrize('spell', [_nested, _flat], ids=['nested', 'flat'])
+def test_fork_only_planner_tolerance_is_rejected(tmp_path, spell):
     share = Path(get_package_share_directory('omslam_navigation'))
+    planner = {'GridBased': {}}
+    spell(planner)
+    if not planner['GridBased']:
+        del planner['GridBased']
     override = tmp_path / 'fork.yaml'
-    override.write_text(yaml.safe_dump({'planner_server': {'ros__parameters': {
-        'GridBased': {'xy_goal_tolerance': .08}}}}))
+    override.write_text(yaml.safe_dump({'planner_server': {'ros__parameters': planner}}))
     with pytest.raises(ValueError, match='GridBased.xy_goal_tolerance'):
         load_configuration(share, override)
     # A resolved dictionary is revalidated by launch; the matching value is
     # still rejected because stock Jazzy would silently ignore it.
     config = copy.deepcopy(load_configuration(share))
-    config['planner_server']['ros__parameters']['GridBased']['xy_goal_tolerance'] = .08
-    with pytest.raises(ValueError, match='xy_goal_tolerance'):
+    spell(config['planner_server']['ros__parameters'])
+    with pytest.raises(ValueError, match='GridBased.xy_goal_tolerance'):
         validate_configuration(config, share)
 
 
