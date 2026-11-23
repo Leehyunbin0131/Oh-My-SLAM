@@ -1,17 +1,17 @@
 # 시뮬레이션 자율주행
 
-[README](../README.md) · [지도 작성·위치추정](sim_mapping.md) · [인수 기준](acceptance.md) · [P4 구현·검증 명세](p4_implementation_plan.md)
+[README](../README.md) · [통합 설계](architecture.md) · [지도 작성·위치추정](sim_mapping.md) · [인수 기준](acceptance.md)
 
 `omslam_navigation`은 온라인 SLAM 또는 저장 지도에서 State Lattice 경로를 DWB로 추종합니다. 라이다와 RGB-D 장애물 기억을 비용지도에 반영하고, `navigation_guard`가 관측·명령·실행 상태에 따라 구동을 차단합니다. 이 실행 경로의 대상은 Gazebo 시뮬레이션입니다.
 
-Gazebo 주행 범위는 바퀴별 **3–70 RPM**(상한 직진 약 **0.4985 m/s**, 회전 **0.50 rad/s**, 최소 구동 하한 **3.0 RPM** peak-wheel 데드밴드 컷)입니다. GUI는 **35 RPM**으로 시작하며 **3–70 RPM** 범위에서 막대(0.1 RPM 간격)나 숫자 입력으로 조정할 수 있습니다. 과거 42 RPM 상한 프로파일의 직진 중 Nav2 목표를 네 번 취소한 시험에서는 차체가 정지 상태를 0.30초 유지하기까지 0.948~0.956초가 걸렸고, 취소 뒤 이동거리는 9.2~9.5 cm였습니다. [측정 조건과 결과](code_review_fix_results.md)
+Gazebo 주행 범위는 바퀴별 **3–70 RPM**(상한 직진 약 **0.4985 m/s**, 회전 **0.50 rad/s**, 최소 구동 하한 **3.0 RPM** peak-wheel 데드밴드 컷)입니다. GUI는 **35 RPM**으로 시작하며 **3–70 RPM** 범위에서 막대(0.1 RPM 간격)나 숫자 입력으로 조정할 수 있습니다.
 
 ## 한 명령으로 실행
 
 직접 RViz에서 목표를 지정하려면 workspace의 실행 스크립트를 사용합니다.
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 ./nav.sh
 ```
 
@@ -53,7 +53,7 @@ TF 발행 책임은 고정된 launch 구성과 실제 endpoint 목록을 함께 
 기존 workspace overlay를 source하지 않은 셸에서 의존 패키지까지 빌드합니다.
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 /usr/bin/python3 tools/build_navigation.py
 ```
@@ -61,7 +61,7 @@ source /opt/ros/jazzy/setup.bash
 빌드 도구는 소스와 설치 파일의 SHA-256을 기록하고 성공한 빌드를 `reports/sim-navigation/latest_build.json`에 저장합니다. 빌드가 성공한 뒤 새 셸에서 다음 환경을 준비합니다. 명령을 보내는 다른 터미널에도 같은 domain을 설정합니다.
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 export ROS_DOMAIN_ID=86
@@ -119,7 +119,7 @@ ros2 service call /navigation/enable std_srvs/srv/SetBool '{data: true}'
 P4용 RViz 설정을 사용합니다. 다음 명령을 같은 ROS domain의 터미널에서 실행합니다.
 
 ```bash
-rviz2 -d ~/MyRos/Oh_My_SLAM/install/omslam_navigation/share/omslam_navigation/rviz/navigation.rviz \
+rviz2 -d ~/MyRos/Oh-My-SLAM/install/omslam_navigation/share/omslam_navigation/rviz/navigation.rviz \
   --ros-args -p use_sim_time:=true
 ```
 
@@ -163,7 +163,7 @@ ros2 service call /navigation/enable std_srvs/srv/SetBool '{data: false}'
 
 현재 P4 인수는 **한 실행에서 목표 5곳에 연속 정상 도착**하면 종료합니다. 최신 빌드와 변경에 직접 관련된 회귀 검사를 통과한 뒤 실행합니다.
 
-35 RPM 시뮬레이션 설치본(`c175e1f`)에서 **5개 목표 연속 도착과 충돌 0회**를 확인했습니다. Gazebo 기준 최대 위치 오차는 0.1451 m, 최대 방향 오차는 0.1414 rad였습니다. 각 목표의 정지 유지 확인은 0.324초 이내였고 차체와 장애물 사이의 최소 여유는 0.1112 m였습니다. 다섯 번째 목표가 끝난 뒤 구동 해제와 프로세스 종료도 확인했습니다. [제동 및 회전 검증 결과](code_review_fix_results.md)
+기본 P4 인수 기준(35 RPM 기준 설치본 `c175e1f`)에서 **5개 목표 연속 도착과 충돌 0회**(최대 위치 오차 0.1451 m, 최대 방향 오차 0.1414 rad, 정지 유지 확인 0.324초 이내, 장애물 최소 여유 0.1112 m) 및 정상 구동 해제·프로세스 종료를 확인했습니다. 이후 적용된 `3–70 RPM` 범위, `3.0 RPM` 최소 구동 하한, `5 cm` 도착 판정은 단위·DWB 프로브 회귀와 헤드리스 Gazebo `floor-arrival` 시험으로 함께 검증합니다.
 
 ```bash
 /usr/bin/python3 tools/verify_sim_navigation.py \

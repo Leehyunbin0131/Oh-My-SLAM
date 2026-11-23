@@ -67,7 +67,7 @@ flowchart TD
 
 설치되는 vendor에는 **원래 명령 시각을 받는 호환 API 확장**을 포함합니다: `set_target_rpm(left, right, issued_at=...)`. `issued_at`은 같은 프로세스에서 계산한 monotonic 시각이며, 기본 인수 미지정 시 기존 키보드 동작을 유지합니다. 같은 원본 stamp의 평활 출력은 목표값을 바꿀 수 있지만 deadline을 갱신하지 않습니다. 만료·미래 시각·역행 입력은 거부합니다.
 
-이 변경은 메가 펌웨어·OMR1 프로토콜을 바꾸지 않습니다. 공통 라이브러리의 호환 변경은 `Oh-My-Control`의 격리된 로컬 커밋에 반영했고 `dependencies.repos`에 고정합니다. 동일 소스를 vendor에 포함하므로 빌드에 원격 커밋 다운로드는 필요하지 않습니다. ROS 노드·기구학·launch·검증은 모두 `Oh_My_SLAM`에서 구현합니다. 검증 없이 private 속성을 직접 덮어쓰는 어댑터는 만들지 않습니다.
+이 변경은 메가 펌웨어·OMR1 프로토콜을 바꾸지 않습니다. 공통 라이브러리의 호환 변경은 `Oh-My-Control`의 격리된 로컬 커밋에 반영했고 `dependencies.repos`에 고정합니다. 동일 소스를 vendor에 포함하므로 빌드에 원격 커밋 다운로드는 필요하지 않습니다. ROS 노드·기구학·launch·검증은 모두 `Oh-My-SLAM`에서 구현합니다. 검증 없이 private 속성을 직접 덮어쓰는 어댑터는 만들지 않습니다.
 
 ### watchdog과 상태
 
@@ -122,9 +122,11 @@ SE(2) 원호 적분을 사용하고 회전량이 매우 작은 경우 직선 극
 
 `/joint_states`는 `left_wheel_joint`, `right_wheel_joint`의 실제 누적 rad·rad/s를 제공합니다. 양쪽 URDF joint axis는 +Y이며 물리적 전진 방향과 맞는지 확인합니다. `base_footprint`는 구동축 중점의 지면 투영이고 차체 외곽의 중앙이 아닙니다.
 
-## 5. 토픽·QoS 계약
+## 5. 토픽·서비스·액션 계약
 
-아래 이름은 새 워크스페이스의 **계획된 표준 이름**입니다. 기존 드라이버의 토픽은 bringup에서 명시적으로 remap합니다.
+아래 이름은 워크스페이스의 표준 ROS 2 인터페이스입니다. 기존 드라이버의 토픽은 bringup에서 명시적으로 remap합니다.
+
+### 주요 토픽 및 QoS
 
 | 토픽 | 타입 | 발행·소비 | 초기 주기 / QoS |
 | --- | --- | --- | --- |
@@ -146,6 +148,19 @@ SE(2) 원호 적분을 사용하고 회전량이 매우 작은 경우 직선 극
 시뮬레이션 영상·IMU가 `/clock`보다 먼저 도착하면 인지는 시계가 따라올 때까지 보관합니다. 미래 관측을 미리 처리하거나 현재 시각으로 바꾸지 않으며, 대기 중에도 최초 수신 기준 0.30초 만료를 연장하지 않습니다.
 
 QoS는 이름만 맞추는 것으로 끝내지 않고 endpoint의 offered/requested profile을 확인합니다. 동기화가 필요한 RGB-D·IMU의 timestamp 및 TF 유효 시각도 기록합니다.
+
+### 주요 서비스 및 액션
+
+| 이름 | 종류 · 타입 | 제공 노드 | 역할 |
+| --- | --- | --- | --- |
+| `/navigation/enable` | Service · `std_srvs/srv/SetBool` | `navigation_guard` | 관측·TF·서버 준비 확인 후 구동 권한 활성화 또는 즉시 정지·해제 |
+| `/navigate_to_pose` | Action · `nav2_msgs/action/NavigateToPose` | `bt_navigator` | Nav2 단일 목표 경로 계획·추종 및 정지 도착 판정 |
+| `/operator/control` | Service · `omslam_operator_msgs/srv/Control` | `navigation_guard` | 콘솔 제어권 취득·유지·해제 및 내부 `AUTO`/`MANUAL` 전환 |
+| `/operator/navigate` | Action · `omslam_operator_msgs/action/OperatorNavigate` | `navigation_guard` | 콘솔 단일·순차 목적지 이동(각 목표 완료 및 측정 정지 확인) |
+| `/operator/stop` | Service · `std_srvs/srv/Trigger` | `navigation_guard` | 즉시 정지, 진행 중 목표 취소 및 구동 권한 해제 |
+| `/operator/speed_limit` | Service · `omslam_operator_msgs/srv/SetSpeedLimit` | `navigation_guard` | 바퀴별 운용 RPM 상한(시뮬레이션 `3–70 RPM`) 동적 설정 |
+| `/operator/set_keepouts` | Service · `omslam_operator_msgs/srv/SetKeepoutZones` | `navigation_guard` | 진입 금지 구역 갱신(전역·지역 비용지도 및 수동 조종 반영) |
+| `/operator/maps` | Service · `omslam_operator_msgs/srv/MapCommand` | `omslam_operator_support` | 지도·금지 구역 저장, 저장 지도(AMCL) 전환 및 새 SLAM 세션 시작 |
 
 ## 6. TF·위치추정 소유권
 

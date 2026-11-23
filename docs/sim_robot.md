@@ -33,7 +33,7 @@
 ## 실행
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-up-to omslam_sim \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3

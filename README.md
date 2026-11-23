@@ -109,41 +109,57 @@ flowchart LR
 
 | 문서 | 주요 내용 |
 | --- | --- |
-| [**구동 브리지·EKF 실행**](docs/base_ekf.md) | 엔코더·IMU 입력, lifecycle, 장착 TF, 빌드·실행과 모의 검증 |
-| [**통합 아키텍처 설계**](docs/architecture.md) | 호스트–Mega 연결 구조, 원본 명령 수명과 워치독 계약, 기구학·엔코더 오도메트리, 표준 토픽·QoS·TF 트리 설계 |
+| [**통합 아키텍처 설계**](docs/architecture.md) | 호스트–Mega 연결 구조, 원본 명령 수명과 워치독 계약, 기구학·오도메트리, 토픽·서비스·액션·TF 계약 |
 | [**단계별 구현 계획**](docs/roadmap.md) | `P0`~`P8` 단계별 선행 조건, 구현 패키지 구성, 실행 모드 및 완료 기준 |
 | [**인수 검증 기준**](docs/acceptance.md) | 단계별 통합 시험(`V1`~`V8`) 묶음, 정량적 통과 기준, 실패 주입 범위 및 검증 기록 구조 |
 | [**기술 기준과 호환성**](docs/baseline.md) | 기준 OS·ROS 2 패키지 버전, 하드웨어·모델 기하 규격, 기존 시뮬레이션·실물 자산의 이관 범위 |
-| [**시뮬레이션 지도 작성·위치추정**](docs/sim_mapping.md) | SLAM/AMCL 모드, 지도·그래프 저장과 재로딩, 실행 절차 |
-| [**시뮬레이션 자율주행**](docs/sim_navigation.md) | 두 Nav2 모드, 구동 활성화·목표·정지·복구, 인지와 통합 검증 |
-| [**로봇 콘솔 실행**](docs/operator_gui.md) | 실제 ROS 계측, 통합 목적지 이동, 직접 조종, 지도 작업과 시스템 로그 |
-| [**통합 제어·모니터링 GUI 계획**](docs/operator_gui_plan.md) | 한 화면의 주행·계측, 통합 이동 흐름, 유지하는 데이터·제어 계약 |
-| [**P4 자율주행 작업 계획**](docs/p4_implementation_plan.md) | State Lattice+DWB·인지 이관, 센서·Nav2·구동 동시 검증과 결함 수정·재검증 계획 |
-| [**코드 리뷰·수정 검증**](docs/code_review.md) | 최종 경로 검증, 시간 역행·명령 경쟁·프로세스 교체 복구 및 MCU 시각 동기화 수정 결과 |
+| [**구동 브리지·EKF 실행**](docs/base_ekf.md) | 엔코더·IMU 입력, lifecycle, 장착 TF, 빌드·실행과 모의 검증 |
 | [**로봇·센서 시뮬레이션**](docs/sim_robot.md) | CAD 모델, 가상 라이다·IMU·RGB-D, 공통 명령·wheel/EKF·TF 연결 |
 | [**공항 시뮬레이션 환경**](docs/airport_world.md) | 2터미널 공간·가구·보행자, 빌드·실행, 기하 기반 참고 지도, 자산 재생성 |
-| [**스킬 평가 기록 규격**](docs/skill-evaluation.md) | 저장소 외부에서 관리하는 ROS 2 스킬 적용 이력 및 효과 분석 기록 형식 |
+| [**시뮬레이션 지도 작성·위치추정**](docs/sim_mapping.md) | SLAM/AMCL 모드, 지도·그래프 저장과 재로딩, 실행 절차 |
+| [**시뮬레이션 자율주행**](docs/sim_navigation.md) | 두 Nav2 모드, 구동 활성화·목표·정지·복구, 인지와 통합 검증 |
+| [**로봇 콘솔 실행**](docs/operator_gui.md) | 실제 ROS 계측, 통합 목적지 이동, 직접 조종, 금지 구역, 지도 작업과 시스템 로그 |
 
 <a id="workspace"></a>
 
-## 작업 환경과 의존성 관리
+## 작업 환경과 빠른 시작 (Quickstart)
 
-- **작업 경로**: 개발 PC는 `~/MyRos/Oh_My_SLAM`, 실물 로봇(Jetson Orin)은 `~/Oh_My_SLAM`을 기준으로 하며, 각 아키텍처(`x86_64` / `ARM64`)에서 독립적으로 빌드합니다.
+- **기준 환경**: Ubuntu 24.04 · ROS 2 Jazzy · Gazebo Harmonic (개발 PC `x86_64`, 실물 Jetson Orin `ARM64` 각각 독립 빌드)
+- **작업 경로**: 개발 PC는 `~/MyRos/Oh-My-SLAM`, 실물 로봇(Jetson Orin)은 `~/Oh-My-SLAM`을 기준으로 합니다.
 - **고정 의존성([`dependencies.repos`](dependencies.repos))**: 재사용하는 `Oh-My-Control`(통신·구동 코어)과 `Oh-My-MobileRobot`(URDF·메시 모델)의 기준 커밋을 고정합니다. `external/` 경로는 `colcon` 기본 탐색에서 제외하고 필요한 모듈만 전용 패키지로 설치합니다.
 - **데이터 분리**: 실물 실내 지도, 원본 `rosbag`, 장비별 로컬 설정 및 상세 실행 로그(`reports/`)는 Git 저장소 외부에 보관하며, 공개 가능한 검증 요약과 재현 절차만 문서에 기록합니다.
 
+### 1. 사전 패키지 설치 및 빌드
+
 ```bash
+# ROS 2 Jazzy 필수 패키지 (Ubuntu 24.04)
+sudo apt update && sudo apt install -y \
+  ros-jazzy-navigation2 ros-jazzy-nav2-bringup \
+  ros-jazzy-slam-toolbox ros-jazzy-robot-localization \
+  ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge \
+  python3-serial python3-yaml python3-numpy python3-pytest
+
+# 저장소 클론 및 전체 시뮬레이션·자율주행·콘솔 빌드
 git clone https://github.com/Leehyunbin0131/Oh-My-SLAM.git
 cd Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
-colcon build --packages-up-to omslam_sim \
+colcon build --base-paths src --packages-up-to omslam_operator_support \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
-./sim.sh
+
+# (선택) Qt 로봇 콘솔 실행용 가상환경
+python3 -m venv --system-site-packages .venv-operator
+.venv-operator/bin/python -m pip install -r requirements-operator.txt
 ```
 
-`./sim.sh`는 공항과 로봇·센서·EKF를 실행하며, `pedestrians:=false`로 보행자를 끌 수 있습니다. [공항 평면도](src/omslam_sim/maps/airport_floorplan.png)와 [실행 옵션](docs/airport_world.md)을 참고하세요.
+### 2. 실행 모드
 
-Nav2에서 직접 목표를 지정하려면 `omslam_navigation`까지 빌드한 뒤 **`./nav.sh`**를 실행합니다. Gazebo·Nav2·RViz 준비와 구동 활성화를 자동으로 처리합니다. 기본 시험 코스와 공항 선택, 종료 방법은 [자율주행 실행 안내](docs/sim_navigation.md#한-명령으로-실행)를 따릅니다.
+| 명령 | 구성 및 용도 | 상세 안내 |
+| --- | --- | --- |
+| `./sim.sh` | Gazebo 공항 환경 + 로봇·센서·EKF (`pedestrians:=false`로 보행자 비활성화) | [공항 환경](docs/airport_world.md) · [로봇 시뮬레이션](docs/sim_robot.md) |
+| `./nav.sh` | Gazebo + 온라인 SLAM + Nav2 + RViz (`--world airport`로 공항 선택) | [자율주행 실행 안내](docs/sim_navigation.md#한-명령으로-실행) |
+| `./console.sh --start-sim` | Gazebo + SLAM + Nav2 + **Oh My Robot Console** 통합 실행 (`--world airport`, `--gazebo-gui`) | [콘솔 실행 안내](docs/operator_gui.md) |
+
+[공항 평면도](src/omslam_sim/maps/airport_floorplan.png)에서 전체 터미널 배치를 확인할 수 있습니다.
 
 ## 라이선스
 

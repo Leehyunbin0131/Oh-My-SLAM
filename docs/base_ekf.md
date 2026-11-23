@@ -51,7 +51,7 @@ EKF는 2D 모드이며 `odom → base_footprint`를 단독 발행합니다. 브�
 ## 빌드와 실행
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-up-to omslam_localization \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
@@ -61,7 +61,7 @@ colcon build --packages-up-to omslam_localization \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source ~/MyRos/Oh_My_SLAM/install/setup.bash
+source ~/MyRos/Oh-My-SLAM/install/setup.bash
 ros2 launch omslam_localization base_ekf.launch.py
 ```
 

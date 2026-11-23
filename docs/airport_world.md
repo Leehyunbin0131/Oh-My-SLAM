@@ -46,7 +46,7 @@
 새 터미널에서 ROS underlay를 선택하고 해당 패키지를 빌드합니다. ROS용 Python을 명시하여 다른 로컬 Python 환경이 CMake에 선택되지 않게 합니다.
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-up-to omslam_sim \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3

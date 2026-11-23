@@ -1,6 +1,6 @@
 # 지도 중심 로봇 콘솔
 
-[README](../README.md) · [GUI 요구사항](operator_gui_plan.md)
+[README](../README.md) · [통합 설계](architecture.md) · [시뮬레이션 자율주행](sim_navigation.md)
 
 **지도에서 목적지를 지정하고 실제 ROS 센서·구동 수치를 확인합니다. 별도 화면은 시스템 로그 하나입니다.** 목적지 이동과 직접 조종에 필요한 제어권 획득·모드 전환은 내부에서 처리합니다.
 
@@ -9,7 +9,7 @@
 ROS 2 Jazzy 환경에서 패키지를 빌드하고 Qt 환경을 준비합니다.
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 colcon build --base-paths src --packages-up-to omslam_operator_support \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
@@ -64,7 +64,7 @@ ROS_DOMAIN_ID=86 ./console.sh --debug-path
 
 기록기는 GUI와 별도 프로세스에서 관측만 수행합니다. 기록을 켜도 계획기·도착 허용오차·주행 명령은 변경하지 않습니다. 기록 파일은 로컬 `reports/`에 저장되며 Git 추적 대상에서 제외됩니다.
 
-설치본 회귀 90개와 격리된 모의 ROS·실제 Qt 통합 23항목으로 자동 저장·목표 연결·정상 종료를 검증했습니다. 실행 근거는 로컬 `reports/path-debug-mode/completion-report.md`에 보관합니다. 이 시험은 기록 기능의 검증이며 실제 원형 경로의 원인 확인을 대신하지 않습니다.
+설치본 회귀와 격리된 모의 ROS·실제 Qt 통합 시험으로 자동 저장·목표 연결·정상 종료를 검증했습니다. 이 시험은 기록 기능의 검증이며 실제 경로 이탈의 원인 분석을 대신하지 않습니다.
 
 ## 목적지와 이동
 
@@ -172,12 +172,6 @@ source install/setup.bash
 | 지도 | 번들 저장, AMCL 지도 불러오기, 초기 위치 적용, 새 SLAM 복귀 통과 |
 | 재연결 | 실제 앱 실행 경로로 재접속, 이전 이동 자동 재개 없음, 정상 종료 및 소유 프로세스 정리 확인 |
 
-시뮬레이션은 `p4_course`에서 수행했습니다. 네이티브 Qt 시작과 실제 ROS 데이터 표시를 확인했으며, 창 관리자의 크기 변경 영향을 분리하기 위해 지정 해상도와 통합 조작은 offscreen 렌더링으로 검증했습니다. 이 경우에도 실제 Gazebo·ROS 노드와 서비스·action을 사용했습니다.
+시뮬레이션 검증은 `p4_course`에서 네이티브 Qt 시작과 실제 Gazebo·ROS 서비스·액션 연결로 수행했습니다. 지정 해상도(`1280×800`, `1440×900`)와 자동화 통합 조작은 창 관리자의 크기 변경 영향을 분리하기 위해 offscreen 렌더링을 병행했습니다.
 
-변경하지 않은 동작의 통과 근거는 소스 차이를 확인해 재사용했습니다. 실패 원본과 이어서 수행한 검증, 적용 범위는 `reports/operator/live-completion_report.md`와 `live-completion_summary.json`에 기록합니다. 이전 기능 검증 `live-011/`은 앱 종료 후 정지·제어권 해제와 실제 실행 경로의 재연결을 통과했습니다. 이후 반복 수신 지연 수정은 `dropout-control-01/`에서 실제 네이티브 Qt로 검증했습니다. 정상 운용 50초·498개 화면 표본에서 제어·RGB·깊이 지연 판정과 제어권 소실이 없었고, 직접 조종·입력 해제 정지·의도적 GUI 멈춤 후 안전 정지를 확인했습니다. 변경 관련 회귀 61개가 통과했습니다. 측정 범위와 CPU 비교의 한계는 로컬 보고서 `reports/operator/dropout-fix-report.md`에 기록합니다. 실물은 관측 연결 범위를 유지합니다.
-
-자동 이동 중 반복 정지에 대한 추가 수정은 로컬 보고서 `reports/operator/stop-recurrence-report.md`에 기록합니다. ROS worker의 콜백 사이 실행권 양보와 Smac smoother의 지도 경계 검사를 추가했습니다. 최신 네이티브 Qt + 온라인 SLAM 실행에서 목표 3곳 연속 도착·정상 구간의 예상치 못한 정지 0회·고의 GUI 멈춤 후 정지 및 자동 재개 방지를 확인했습니다. 이전 직접 조종 검증과 이번 자동 이동 검증의 범위는 구분합니다.
-
-금지 구역·로봇 따라가기·목표 입력 취소·숫자 RPM 입력은 `reports/gui-map-tools/completion-report.md`에 기록합니다. 설치본 회귀 120개와 모의 모델을 연결한 설치 QML 조작 9개가 통과했습니다. 별도 실제 ROS 시뮬레이션에서는 37.5 RPM 명령 상한, 구역 밖 정지, 구역 삭제 후 동일 출발·목표 경로 복구를 확인했습니다. 지도 저장·구역 복원은 설치 ROS 서비스와 모의 제어권·정지 상태로 검증했습니다. 이 범위를 실물 주행 또는 전체 코스 검증으로 확대하지 않습니다.
-
-표시 처리 최적화는 로컬 보고서 `reports/operator/gui-performance-123/completion_report.md`에 기록합니다. 관련 회귀 40개와 별도 ROS 시험 발행기를 사용한 네이티브 화면 동작 16개를 확인했습니다. 동일 격자 수신·이미지 준비 비교에서 비용지도 숨김은 86.58→18.02ms, 모두 표시는 100.39→35.04ms의 CPU 시간이 들었으며 이미지 픽셀과 색상표는 동일했습니다. 이 수치는 해당 처리 구간의 비교이며 전체 GUI FPS나 주행 성능의 개선율은 아닙니다.
+추가로 ROS worker의 콜백 양보 및 지도 레이어 변경 감지·이미지 캐싱, 금지 구역·로봇 따라가기·숫자 RPM 입력, 의도적 GUI 멈춤(heartbeat 단절) 후 안전 정지 및 자동 재개 방지를 설치본 단위·QML 회귀와 실제 시뮬레이션으로 확인했습니다. 상세 실행 로그는 실행 시 로컬 `reports/operator/` 아래에 생성되며 Git 추적 대상에서 제외됩니다. 실물 연결은 관측 전용 범위를 유지합니다.

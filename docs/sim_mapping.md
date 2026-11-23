@@ -21,7 +21,7 @@
 빌드는 시뮬레이터와 지도 패키지를 함께 대상으로 합니다.
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-up-to omslam_sim omslam_mapping \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3
@@ -31,7 +31,7 @@ colcon build --packages-up-to omslam_sim omslam_mapping \
 지도 명령을 실행할 별도 터미널에는 같은 workspace와 ROS domain을 설정합니다. 아래 환경 설정은 각 새 터미널에 적용합니다.
 
 ```bash
-cd ~/MyRos/Oh_My_SLAM
+cd ~/MyRos/Oh-My-SLAM
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 export ROS_DOMAIN_ID=86
