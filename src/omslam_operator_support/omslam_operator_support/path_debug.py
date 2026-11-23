@@ -47,7 +47,7 @@ MAX_QUEUE_BYTES = 16 * 1024 ** 2
 MAX_GRID_CELLS = 16 * 1024 ** 2
 # These plugins and IDs are the runtime contract validated by the navigation launch.
 REQUIRED_PARAMETERS = {
-    'planner_server': {'GridBased.plugin', 'GridBased.xy_goal_tolerance', 'GridBased.tolerance',
+    'planner_server': {'GridBased.plugin', 'GridBased.tolerance',
                        'GridBased.smooth_path', 'GridBased.lattice_filepath'},
     'controller_server': {'FollowPath.plugin', 'FollowPath.critics', 'FollowPath.max_vel_x',
                           'FollowPath.xy_goal_tolerance', 'FollowPath.trans_stopped_velocity',
@@ -314,7 +314,7 @@ class PathDebugNode(Node):
             self.subscribe(RosPath, topic, self.path, latest)
         for topic in ('/odom', '/wheel/odometry'):
             self.subscribe(Odometry, topic, self.message, latest)
-        for topic in ('/cmd_vel/nav', '/cmd_vel/requested', '/cmd_vel/smoothed', '/cmd_vel/monitored', '/cmd_vel'):
+        for topic in ('/cmd_vel/nav', '/cmd_vel/requested', '/cmd_vel/smoothed', '/cmd_vel'):
             self.subscribe(TwistStamped, topic, self.message, latest)
         self.subscribe(OperatorState, '/operator/state', self.operator, transient)
         self.subscribe(KeepoutZones, '/operator/keepouts', self.message, transient)

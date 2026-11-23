@@ -15,6 +15,15 @@ from rcl_interfaces.srv import GetParameters, ListParameters
 from omslam_operator_msgs.msg import OperatorState
 from omslam_operator_support.path_debug import PathDebugNode, RecordWriter, REQUIRED_PARAMETERS
 
+# Parameters a configured stock Jazzy Smac Lattice planner exposes. The removed
+# fork additionally declared GridBased.xy_goal_tolerance; stock Jazzy does not.
+STOCK_PLANNER_PARAMETERS = [
+    'planner_plugins', 'expected_planner_frequency', 'GridBased.plugin', 'GridBased.tolerance',
+    'GridBased.smooth_path', 'GridBased.lattice_filepath', 'GridBased.allow_unknown',
+    'GridBased.allow_reverse_expansion', 'GridBased.analytic_expansion_max_length',
+    'GridBased.max_planning_time', 'GridBased.cache_obstacle_heuristic',
+]
+
 
 def test_recorder_waits_for_configured_plugins_records_nav_and_requeries_next_session(tmp_path):
     rclpy.init(args=[], domain_id=205)
@@ -31,13 +40,18 @@ def test_recorder_waits_for_configured_plugins_records_nav_and_requeries_next_se
     def listing(request, response):
         response.result.names = sorted(REQUIRED_PARAMETERS['controller_server']) if plugins[0] else ['controller_plugins']
         return response
+    def planner_listing(request, response):
+        response.result.names = list(STOCK_PLANNER_PARAMETERS)
+        return response
     def parameters(request, response):
         response.values = [ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=.1) for _ in request.names]
         return response
-    prefix = namespace + '/controller_server'
-    server.create_service(GetState, prefix+'/get_state', state)
-    server.create_service(ListParameters, prefix+'/list_parameters', listing)
-    server.create_service(GetParameters, prefix+'/get_parameters', parameters)
+    assert 'GridBased.xy_goal_tolerance' not in STOCK_PLANNER_PARAMETERS
+    for node, names in (('controller_server', listing), ('planner_server', planner_listing)):
+        prefix = namespace + '/' + node
+        server.create_service(GetState, prefix+'/get_state', state)
+        server.create_service(ListParameters, prefix+'/list_parameters', names)
+        server.create_service(GetParameters, prefix+'/get_parameters', parameters)
     latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     operator = server.create_publisher(OperatorState, namespace+'/operator/state', latched)
     speeds = {name: server.create_publisher(TwistStamped, namespace+name, 10)
@@ -56,7 +70,9 @@ def test_recorder_waits_for_configured_plugins_records_nav_and_requeries_next_se
         assert not recorder.parameters_completed
         configured[0] = True
         until(lambda: 'waiting for configured parameters' in recorder.parameter_errors.get('controller_server',''))
-        assert not recorder.parameters_completed
+        assert 'controller_server' not in recorder.parameters_completed
+        # The configured stock planner completes without the fork-only key.
+        until(lambda: 'planner_server' in recorder.parameters_completed)
         plugins[0] = True
         until(lambda: 'controller_server' in recorder.parameters_completed)
         until(lambda: all(pub.get_subscription_count() > 0 for pub in speeds.values()))
@@ -72,19 +88,25 @@ def test_recorder_waits_for_configured_plugins_records_nav_and_requeries_next_se
         until(lambda: recorder.parameter_session == 'map-two' and 'waiting for configured parameters' in recorder.parameter_errors.get('controller_server',''))
         assert 'controller_server' not in recorder.parameters_completed
         plugins[0] = True
-        until(lambda: 'controller_server' in recorder.parameters_completed)
+        until(lambda: {'controller_server', 'planner_server'} <= recorder.parameters_completed)
         recorder.parameter_deadline = time.monotonic()-1.
         recorder.housekeeping()
         summary = recorder.finish()
         assert not summary['error']
         saved = json.loads((tmp_path/'raw/summary.json').read_text())
-        assert saved['parameters_completed'] == ['controller_server']
-        assert 'planner_server' in saved['parameters_failed'] and not saved['parameters_pending']
+        assert saved['parameters_completed'] == ['controller_server', 'planner_server']
+        assert 'bt_navigator' in saved['parameters_failed'] and not saved['parameters_pending']
+        assert 'planner_server' not in saved['parameters_failed']
         with (tmp_path/'raw/records.jsonl').open() as stream:
             rows = [json.loads(line) for line in stream]
         params = [r['payload'] for r in rows if r['kind']=='parameters']
-        assert [r['session_id'] for r in params] == ['map-one','map-two']
-        assert all('goal_checker.xy_goal_tolerance' in r['values'] for r in params)
+        controller = [r for r in params if r['node'] == namespace + '/controller_server']
+        planner = [r for r in params if r['node'] == namespace + '/planner_server']
+        assert [r['session_id'] for r in controller] == ['map-one','map-two']
+        assert [r['session_id'] for r in planner] == ['map-one','map-two']
+        assert all('goal_checker.xy_goal_tolerance' in r['values'] for r in controller)
+        assert all('GridBased.tolerance' in r['values'] and 'GridBased.xy_goal_tolerance' not in r['values']
+                   for r in planner)
         observed = {r['topic'][len(namespace):]:r['payload'] for r in rows if r['topic'][len(namespace):] in speeds}
         assert [observed[k]['twist']['linear']['x'] for k in speeds] == [.5,.15,.12]
         assert all(message['header']=={'stamp':{'sec':30,'nanosec':0},'frame_id':'base_footprint'}

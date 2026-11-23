@@ -5,10 +5,12 @@
   <maintainer email="Leehyunbin0131@users.noreply.github.com">Leehyunbin0131</maintainer>
   <license>Apache-2.0</license><buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend><depend>nav2_util</depend><depend>nav2_core</depend>
-  <depend>nav2_costmap_2d</depend><depend>nav2_smac_planner</depend>
+  <depend>nav2_costmap_2d</depend>
   <depend>dwb_critics</depend><depend>dwb_core</depend><depend>dwb_msgs</depend>
   <depend>dwb_plugins</depend><depend>nav2_controller</depend><depend>nav_2d_utils</depend>
   <depend>omslam_operator_msgs</depend>
   <depend>tf2_ros</depend><depend>pluginlib</depend>
+  <!-- plugin_boundary_probe loads the system Smac Lattice plugin by name. -->
+  <exec_depend>nav2_smac_planner</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

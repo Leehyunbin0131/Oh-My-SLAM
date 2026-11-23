@@ -210,7 +210,7 @@ class ConsoleNode(Node):
         self.sub(PerceptionHealth,'/perception/health',lambda m:self.assign('health',plain(m)),transient)
         self.cloud_subscriptions = []
         self.cloud_qos = sensor
-        for topic in ('/cmd_vel/requested','/cmd_vel/smoothed','/cmd_vel/monitored','/cmd_vel'):
+        for topic in ('/cmd_vel/requested','/cmd_vel/smoothed','/cmd_vel'):
             self.sub(TwistStamped,topic,lambda m,t=topic:self.velocity(t,m.twist),10)
         self.manual_pub=self.create_publisher(ManualCommand,self.topic('/operator/manual'),1)
         self.heartbeat_pub=self.create_publisher(OwnerHeartbeat,self.topic('/operator/heartbeat'),1)

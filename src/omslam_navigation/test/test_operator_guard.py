@@ -162,8 +162,15 @@ def test_manual_reverse_lock_invalid_axes_and_limit_values():
     assert not gate.manual(gate.token, gate.epoch_ns, 2, True, stamp, FRAME,
                            (math.nan, 0., 0., 0., 0., 0.), stamp, 11.14)
     assert not gate.sources
-    limited = gate.limit_values((0.2, 0., 0., 0., 0., 0.6))
-    assert limited[5] / limited[0] == pytest.approx(3.)
+    # Request the installed profile's own limits; the outer wheel must exceed
+    # the selected 50% cap (35 of 70 RPM) before coupled scaling.
+    assert gate.geometry.max_rpm == 70. and gate.wheel_rpm_limit == 35.
+    linear, angular = gate.linear_limit, gate.angular_limit
+    outer = (linear + angular * .480 / 2) / .068 * 30 / math.pi
+    assert outer > gate.wheel_rpm_limit * 1.1
+    limited = gate.limit_values((linear, 0., 0., 0., 0., angular))
+    assert limited[5] / limited[0] == pytest.approx(angular / linear)
+    assert limited[0] < linear and limited[5] < angular
     assert max(map(abs, gate.geometry.rpm(limited[0],limited[5]))) == pytest.approx(gate.wheel_rpm_limit)
 
 

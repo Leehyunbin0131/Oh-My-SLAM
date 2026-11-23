@@ -3,7 +3,7 @@ import math
 from omslam_base.core import CLOCK_SKEW_S, CommandGate, Geometry
 
 
-SIM_MAX_WHEEL_RPM = 42.
+SIM_MAX_WHEEL_RPM = 70.
 SIM_MAX_LINEAR_VELOCITY = Geometry().left_radius * math.pi / 30 * SIM_MAX_WHEEL_RPM
 
 

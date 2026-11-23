@@ -36,7 +36,12 @@ def test_pinned_geometry_and_sensor_contract(monkeypatch):
     assert drive.findtext('child_frame_id') == 'base_footprint'
     assert drive.findtext('odom_topic') == '/model/oh_my_mobilerobot/odometry'
     assert drive.findtext('tf_topic').endswith('/unbridged_wheel_tf')
-    assert float(drive.findtext('max_linear_velocity')) == pytest.approx(2*model.math.pi*.068*100/60)
+    assert float(drive.findtext('max_linear_velocity')) == pytest.approx(2*model.math.pi*.068*70/60)
+    assert float(drive.findtext('min_linear_velocity')) == pytest.approx(-2*model.math.pi*.068*70/60)
+    assert float(drive.findtext('max_angular_velocity')) == pytest.approx(4*model.math.pi*.068*70/60/.480)
+    assert [float(drive.findtext(name)) for name in (
+        'max_linear_acceleration', 'min_linear_acceleration',
+        'max_angular_acceleration', 'min_angular_acceleration')] == [.8, -1.5, 1.0, -1.0]
     truth = generated.find("gazebo/plugin[@name='gz::sim::systems::OdometryPublisher']")
     assert truth.findtext('odom_topic') == '/model/oh_my_mobilerobot/ground_truth'
 
@@ -50,3 +55,7 @@ def test_provenance_and_geometry_override_rejection(monkeypatch):
     for settings in ({'wheel_radius': .1}, {'wheel_separation': .6}, {'max_wheel_rpm': 100.01}, {'base_mass': float('nan')}):
         with pytest.raises(ValueError):
             model.simulation_urdf(settings)
+    # The override ceiling remains 100 RPM above the 70 RPM default.
+    drive = ET.fromstring(model.simulation_urdf({'max_wheel_rpm': 100.})).find(
+        "gazebo/plugin[@name='gz::sim::systems::DiffDrive']")
+    assert float(drive.findtext('max_linear_velocity')) == pytest.approx(2*model.math.pi*.068*100/60)

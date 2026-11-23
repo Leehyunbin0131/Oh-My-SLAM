@@ -9,7 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 from omslam_navigation.launch_support import load_configuration, validate_configuration
 
 
-def test_goal_checker_thresholds_are_connected_to_planner_and_dwb(tmp_path):
+def test_goal_checker_thresholds_are_connected_to_dwb_and_independent_of_smac(tmp_path):
     share = Path(get_package_share_directory('omslam_navigation'))
     override = tmp_path / 'goal.yaml'
     override.write_text(yaml.safe_dump({'controller_server': {'ros__parameters': {
@@ -19,7 +19,9 @@ def test_goal_checker_thresholds_are_connected_to_planner_and_dwb(tmp_path):
         config = load_configuration(share, path)
         controller = config['controller_server']['ros__parameters']
         planner = config['planner_server']['ros__parameters']['GridBased']
-        assert planner['xy_goal_tolerance'] == controller['goal_checker']['xy_goal_tolerance'] == xy
+        # Stock Jazzy Smac Lattice has no terminal XY parameter; none is injected.
+        assert 'xy_goal_tolerance' not in planner
+        assert controller['goal_checker']['xy_goal_tolerance'] == xy
         assert controller['FollowPath']['xy_goal_tolerance'] == xy
         assert controller['FollowPath']['trans_stopped_velocity'] == stopped
         assert controller['goal_checker']['trans_stopped_velocity'] == stopped
@@ -30,8 +32,22 @@ def test_goal_checker_thresholds_are_connected_to_planner_and_dwb(tmp_path):
         assert controller['goal_checker']['stateful'] is False
 
 
+def test_fork_only_planner_tolerance_is_rejected(tmp_path):
+    share = Path(get_package_share_directory('omslam_navigation'))
+    override = tmp_path / 'fork.yaml'
+    override.write_text(yaml.safe_dump({'planner_server': {'ros__parameters': {
+        'GridBased': {'xy_goal_tolerance': .08}}}}))
+    with pytest.raises(ValueError, match='GridBased.xy_goal_tolerance'):
+        load_configuration(share, override)
+    # A resolved dictionary is revalidated by launch; the matching value is
+    # still rejected because stock Jazzy would silently ignore it.
+    config = copy.deepcopy(load_configuration(share))
+    config['planner_server']['ros__parameters']['GridBased']['xy_goal_tolerance'] = .08
+    with pytest.raises(ValueError, match='xy_goal_tolerance'):
+        validate_configuration(config, share)
+
+
 @pytest.mark.parametrize('section,plugin,field,value', [
-    ('planner_server', 'GridBased', 'xy_goal_tolerance', .2),
     ('controller_server', 'FollowPath', 'xy_goal_tolerance', .2),
     ('controller_server', 'FollowPath', 'trans_stopped_velocity', .1),
     ('controller_server', 'FollowPath', 'RotateToGoal.scale', 0.),

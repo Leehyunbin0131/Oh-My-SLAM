@@ -23,6 +23,12 @@ from generate_p4_course import generate
 from p4_geometry import polygon, rectangle, intersects
 
 WORKSPACE=Path(__file__).resolve().parents[1]
+SYSTEM_PREFIX=Path('/opt/ros/jazzy')
+# Named checks emitted by plugin_boundary_probe for stock Smac and the production critic.
+BOUNDARY_CHECKS={'inflation_layer_configured','goal_center_not_inscribed','goal_center_requires_footprint_check',
+                 'planner_rejected','planner_free_control','dwb_candidate_rejected','dwb_free_control'}
+# Stock Smac reports these when its footprint check cannot use inflation costs.
+SMAC_CONFIGURATION_WARNINGS=('computeCircumscribedCost','No inflation layer found')
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -77,9 +83,11 @@ def run(output, build=DEFAULT_BUILD, integrated=False, domain=None):
         (directory/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         if not condition: raise AssertionError(name)
     try:
-        packages=['omslam_navigation','omslam_navigation_contracts','nav2_smac_planner','omm_perception','omm_perception_msgs','omm_costmap_layers','omslam_sim']
+        packages=['omslam_navigation','omslam_navigation_contracts','omm_perception','omm_perception_msgs','omm_costmap_layers','omslam_sim']
         prefixes={p:str(Path(get_package_prefix(p)).resolve()) for p in packages}
-        check('P0.1.prefixes',all(Path(v)==WORKSPACE/'install'/k for k,v in prefixes.items()),prefixes=prefixes)
+        smac_prefix=str(Path(get_package_prefix('nav2_smac_planner')).resolve())
+        check('P0.1.prefixes',all(Path(v)==WORKSPACE/'install'/k for k,v in prefixes.items())
+              and smac_prefix==str(SYSTEM_PREFIX),prefixes=prefixes,nav2_smac_planner=smac_prefix)
         manifest = verified_build(build)
         result.update(source_sha256=manifest['source_sha256'], build_manifest_sha256=digest(build))
         check('P0.1.current_build', True, build_manifest=str(build), source_files=len(manifest['source_sha256']))
@@ -118,8 +126,13 @@ def run(output, build=DEFAULT_BUILD, integrated=False, domain=None):
         (directory/'plugin_boundary.log').write_text(completed.stdout)
         lines=[line.split('P4_BOUNDARY_RESULT ',1)[1] for line in completed.stdout.splitlines() if 'P4_BOUNDARY_RESULT ' in line]
         observed=json.loads(lines[-1]) if lines else {}
-        check('P0.7.actual_plugins',completed.returncode==0 and len(observed)==10 and all(observed.values()),
-              command=command,exit_code=completed.returncode,observed=observed)
+        probe_checks=observed.get('checks',{})
+        warnings=[line for line in completed.stdout.splitlines()
+                  if any(text in line for text in SMAC_CONFIGURATION_WARNINGS)]
+        check('P0.7.actual_plugins',completed.returncode==0 and set(probe_checks)==BOUNDARY_CHECKS
+              and all(value is True for value in probe_checks.values()) and not warnings,
+              command=command,exit_code=completed.returncode,observed=observed,
+              smac_configuration_warnings=warnings,smac_prefix=smac_prefix)
         if integrated:
             destination = directory / 'command-chain'
             chain = subprocess.run([sys.executable, str(WORKSPACE/'tools/probe_p4_command_chain.py'),

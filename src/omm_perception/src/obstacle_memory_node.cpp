@@ -436,7 +436,7 @@ private:
         raw_pub_->publish(cloud(raw, msg->header));
       auto header = msg->header;
       header.frame_id = base_frame_;
-      // Keep the original sensor stamp so Collision Monitor detects delayed
+      // Keep the original sensor stamp so consumers can detect delayed
       // data.
       obstacle_pub_->publish(cloud(obstacles, header));
     } catch (const std::exception &e) {

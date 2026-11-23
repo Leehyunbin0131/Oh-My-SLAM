@@ -1,7 +1,7 @@
 """Single operator ownership, measured-stop boundaries and manual source leases.
 
 No ROS transport belongs here. NavigationGate still owns the original stamped
-command history and the final collision-monitor gate for both sources.
+command history and the final smoothed-command gate for both sources.
 """
 
 import math

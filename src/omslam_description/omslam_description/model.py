@@ -11,7 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 DEFAULT_SETTINGS = {
-    "wheel_radius": .068, "wheel_separation": .480, "max_wheel_rpm": 100.,
+    "wheel_radius": .068, "wheel_separation": .480, "max_wheel_rpm": 70.,
     "base_mass": 8., "wheel_mass": .30, "caster_swivel_mass": .10,
     "caster_wheel_mass": .10, "sensor_mass": .10,
 }
@@ -103,7 +103,7 @@ def simulation_urdf(settings=None):
         'min_linear_velocity': -2*math.pi*.068*settings['max_wheel_rpm']/60,
         'max_angular_velocity': 4*math.pi*.068*settings['max_wheel_rpm']/60/.480,
         'min_angular_velocity': -4*math.pi*.068*settings['max_wheel_rpm']/60/.480,
-        'max_linear_acceleration': .5, 'min_linear_acceleration': -.5,
+        'max_linear_acceleration': .8, 'min_linear_acceleration': -1.5,
         'max_angular_acceleration': 1.0, 'min_angular_acceleration': -1.0,
     }.items():
         ET.SubElement(drive, key).text = str(value)

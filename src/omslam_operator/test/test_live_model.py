@@ -394,21 +394,28 @@ def test_stop_before_worker_claim_finishes_only_after_measured_stop(model):
     assert not model.queue_waiting and model.queue[0]['status'] == '취소됨'
 
 
-@pytest.mark.parametrize('percent', [25., 50., 100.])
-def test_gui_speed_steps_follow_100_rpm_server_limit(model, percent):
-    maximum = 2 * np.pi * .068 * 100 / 60
-    model.s.data['operator'].update(max_linear_velocity=maximum, linear_limit=maximum / 2)
+@pytest.mark.parametrize('server_rpm,percent,expected_rpm', [
+    (70., 25., 17.5), (70., 50., 35.), (70., 100., 70.),
+    (100., 25., 25.), (100., 50., 50.), (100., 100., 100.),
+])
+def test_gui_speed_steps_follow_server_rpm_limit(model, server_rpm, percent, expected_rpm):
+    maximum = 2 * np.pi * .068 * server_rpm / 60
+    model.s.data['operator'].update(max_linear_velocity=maximum, linear_limit=maximum / 2,
+                                    max_angular_velocity=.5, max_wheel_rpm=server_rpm,
+                                    wheel_rpm_limit=server_rpm / 2)
     own(model, 'DISABLED')
     selected = maximum * percent / 100
     model.setSpeedLimit(selected)
     request = commands(model, 'speed')[0]
     assert request['linear_limit'] == pytest.approx(selected)
-    assert request['speed_percent'] == percent
+    assert request['speed_percent'] == pytest.approx(percent)
+    assert request['wheel_rpm_limit'] == pytest.approx(expected_rpm)
+    assert request['angular_limit'] == pytest.approx(.5 * percent / 100)
     model.s.data['operator']['linear_limit'] = selected
     model.refresh()
     assert model.ui['speedOptions'] == pytest.approx([maximum / 4, maximum / 2, maximum])
     assert model.ui['speedIndex'] == [25., 50., 100.].index(percent)
-    assert selected * 60 / (2 * np.pi * .068) == pytest.approx(percent)
+    assert selected * 60 / (2 * np.pi * .068) == pytest.approx(expected_rpm)
 
 
 def test_numeric_rpm_maps_to_authorized_speed_request(model):

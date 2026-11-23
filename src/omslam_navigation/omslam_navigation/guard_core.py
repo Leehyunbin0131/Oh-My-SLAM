@@ -7,6 +7,7 @@ lease, and a stop always takes precedence over a queued nonzero command.
 
 from dataclasses import dataclass
 from omslam_base.core import CLOCK_SKEW_S
+from omslam_sim.control import SIM_MAX_LINEAR_VELOCITY
 import math
 
 
@@ -17,8 +18,8 @@ class Limits:
     recovery_time: float = 1.0
     map_translation: float = 0.10
     map_rotation: float = 0.10
-    max_vx: float = 0.20
-    max_wz: float = 0.60
+    max_vx: float = SIM_MAX_LINEAR_VELOCITY
+    max_wz: float = 0.50
     frame: str = 'base_footprint'
 
 
@@ -334,7 +335,7 @@ class NavigationGate:
         # dropped. Validate frame/axes only for a currently authorized source.
         if not self._valid_twist(frame, values):
             self.rejected_finals += 1
-            self.fault('invalid collision monitor command')
+            self.fault('invalid velocity_smoother command')
             return False
         vx, _, _, _, _, wz = values
         self.output = (vx, wz)
@@ -359,8 +360,8 @@ class NavigationGate:
                     # interval of the same action, not a new driving intention.
                     self._discard_commands()
             elif self.final_at is None and wall - self.first_source_at >= self.limits.command_timeout:
-                self.fault('collision monitor output missing')
+                self.fault('velocity_smoother output missing')
             elif (self.final_at is not None and wall - self.final_at >= self.limits.command_timeout and
                   (latest.motion_requested or self.output != (0.0, 0.0))):
-                self.fault('collision monitor output expired')
+                self.fault('velocity_smoother output expired')
         return self.output

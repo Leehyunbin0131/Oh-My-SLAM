@@ -96,13 +96,15 @@ def motion_allowed(polygons, pose, vx, wz):
     """Sample current footprint and a conservative command/braking horizon.
 
     This is a virtual barrier, not a physical stopping-distance certification.
-    Collision Monitor and base command expiry remain independent safeguards.
+    Base command expiry remains an independent safeguard.
     """
     if not all(math.isfinite(v) for v in (*pose, vx, wz)):
         return False
     if not polygons:
         return True
-    # Allow 300 ms command transport/expiry plus the configured braking time.
+    # Allow 300 ms command transport/expiry plus a fixed virtual-wall projection.
+    # These divisors are deliberately conservative constants, not the
+    # configured actuator deceleration, and they do not limit cruising speed.
     horizon = .30 + max(abs(vx) / .50, abs(wz) / 1.0)
     # At most 1 cm of footprint vertex travel between sampled poses.
     radius = math.hypot(.41, .28)

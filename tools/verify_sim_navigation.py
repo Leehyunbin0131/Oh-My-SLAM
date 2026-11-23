@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 import traceback
+import xml.etree.ElementTree as ET
 import numpy as np
 
 from generate_p4_course import object_sdf
@@ -28,6 +29,14 @@ from verify_sim_robot import stamp_s,yaw,digest
 from build_navigation import DEFAULT_BUILD, DEFAULT_VALIDATION, package_source_hashes, verified_build
 
 WORKSPACE=Path(__file__).resolve().parents[1]
+# Stock Jazzy Smac planner. Hash these files explicitly: the package prefix is
+# the whole ROS installation and must never be walked recursively.
+SYSTEM_PREFIX=Path('/opt/ros/jazzy')
+SMAC_LIBRARY=SYSTEM_PREFIX/'lib/libnav2_smac_planner_lattice.so'
+SMAC_MANIFEST=SYSTEM_PREFIX/'share/nav2_smac_planner/package.xml'
+STOCK_DIFF_PRIMITIVE=SYSTEM_PREFIX/'share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json'
+LATTICE_SHA256='105b37351d15e340cc2921fa8878c8ea727a65cd7e89c39c977be0654be3b2a9'
+COMMAND_TOPICS=('/cmd_vel/nav','/cmd_vel/requested','/cmd_vel/smoothed','/cmd_vel','/sim/cmd_vel')
 ALL_CHECKS=[f'V4-{n:02d}' for n in range(1,15)]
 FIVE_GOAL_CHECKS=['installed_readiness','five_consecutive_goals','arrival_accuracy',
                   'collision_free','command_limits','normal_shutdown']
@@ -65,8 +74,7 @@ def last_valid_sensor_stamp(records, topic, initial_stamp, zero):
 def command_limit_evidence(events, geometry, limits):
     """Check each velocity stage and the unsaturated kinematics at Gazebo's input."""
     stages = {}
-    for topic in ('/cmd_vel/nav', '/cmd_vel/requested', '/cmd_vel/smoothed',
-                  '/cmd_vel/monitored', '/cmd_vel', '/sim/cmd_vel'):
+    for topic in COMMAND_TOPICS:
         values = np.asarray([e['velocity'] for e in events if e['topic'] == topic])
         stage = stages[topic] = {'samples': len(values), 'passed': False}
         if values.shape != (len(values), 6) or not len(values) or not np.isfinite(values).all():
@@ -275,7 +283,7 @@ class NavigationRun:
         if topic=='/behavior_tree_log':
             self.bt_events.extend({**self.now(),'stamp':stamp_s(e.timestamp),'name':e.node_name,'uid':e.uid,
                 'previous':e.previous_status,'current':e.current_status} for e in msg.event_log)
-        if topic in ('/cmd_vel/nav','/cmd_vel/requested','/cmd_vel/smoothed','/cmd_vel/monitored','/cmd_vel','/sim/cmd_vel'):
+        if topic in COMMAND_TOPICS:
             twist=msg.twist if hasattr(msg,'twist') else msg
             self.command_events.append({**self.now(),'drive_clock':self.drive_clock[0],'topic':topic,'stamp':stamp_s(msg.header.stamp) if hasattr(msg,'header') else None,
                 'frame':msg.header.frame_id if hasattr(msg,'header') else None,
@@ -317,7 +325,7 @@ class NavigationRun:
         from sensor_msgs.msg import LaserScan,Imu,Image,CameraInfo,PointCloud2
         from geometry_msgs.msg import Twist,TwistStamped
         from nav_msgs.msg import Odometry,OccupancyGrid,Path as RosPath
-        from nav2_msgs.msg import Costmap,CollisionMonitorState,BehaviorTreeLog
+        from nav2_msgs.msg import Costmap,BehaviorTreeLog
         from nav2_msgs.action import NavigateToPose
         from nav2_msgs.srv import GetCostmap
         from action_msgs.msg import GoalStatusArray
@@ -352,10 +360,10 @@ class NavigationRun:
                 '/camera/depth/image_rect_raw':Image,'/camera/depth/camera_info':CameraInfo,
                 '/diagnostics':DiagnosticArray,'/rosout':Log,'/sim/cmd_vel':Twist,
                 '/cmd_vel/nav':TwistStamped,'/cmd_vel/requested':TwistStamped,'/cmd_vel/smoothed':TwistStamped,
-                '/cmd_vel/monitored':TwistStamped,'/cmd_vel':TwistStamped,'/navigation/state':String,
+                '/cmd_vel':TwistStamped,'/navigation/state':String,
                 '/perception/health':PerceptionHealth,'/perception/memory':ObstacleMemory,'/perception/obstacles':PointCloud2,
                 '/map':OccupancyGrid,'/global_costmap/costmap_raw':Costmap,'/local_costmap/costmap_raw':Costmap,
-                '/unsmoothed_plan':RosPath,'/plan':RosPath,'/collision_monitor_state':CollisionMonitorState,
+                '/unsmoothed_plan':RosPath,'/plan':RosPath,
                 '/behavior_tree_log':BehaviorTreeLog,
                 '/follow_path/_action/status':GoalStatusArray,'/navigate_to_pose/_action/status':GoalStatusArray,'/slam_toolbox/graph_visualization':MarkerArray}
         transient_topics={'/tf_static','/map','/perception/memory','/perception/health','/navigation/state',
@@ -538,12 +546,13 @@ class NavigationRun:
     def parameters_and_graph(self):
         from ament_index_python.packages import get_package_prefix,get_package_share_directory
         from rclpy.qos import qos_check_compatible,QoSCompatibility
-        expected={'planner_server':{'GridBased.plugin':'nav2_smac_planner::SmacPlannerLattice'},
+        nav=Path(get_package_share_directory('omslam_navigation'));lattice=nav/'config/lattice/diff_5cm_16h_r0p5.json'
+        expected={'planner_server':{'GridBased.plugin':'nav2_smac_planner::SmacPlannerLattice',
+                                    'GridBased.lattice_filepath':str(lattice.resolve())},
                   'controller_server':{'FollowPath.plugin':'dwb_core::DWBLocalPlanner','enable_stamped_cmd_vel':True,
                                        'goal_checker.plugin':'nav2_controller::StoppedGoalChecker',
                                        'goal_checker.trans_stopped_velocity':.01,'goal_checker.rot_stopped_velocity':.02},
-                  'velocity_smoother':{'enable_stamped_cmd_vel':True,'stamp_smoothed_velocity_with_smoothing_time':False},
-                  'collision_monitor':{'enable_stamped_cmd_vel':True}}
+                  'velocity_smoother':{'enable_stamped_cmd_vel':True,'stamp_smoothed_velocity_with_smoothing_time':False}}
         observed={node:self.parameter(node,list(values)) for node,values in expected.items()}
         self.e.detail('I0.actual_plugin_parameters',all(observed[node]==values for node,values in expected.items()),parameters=observed)
         self.drive_geometry = self.parameter('sim_base', ['left_radius', 'right_radius', 'wheel_separation', 'max_rpm'])
@@ -552,7 +561,7 @@ class NavigationRun:
                       for v in (*self.drive_geometry.values(), *self.drive_limits.values())),
                       geometry=self.drive_geometry, limits=self.drive_limits)
         dumps={}
-        for node in ('planner_server','controller_server','velocity_smoother','collision_monitor','bt_navigator',
+        for node in ('planner_server','controller_server','velocity_smoother','bt_navigator',
                      'global_costmap/global_costmap','local_costmap/local_costmap','navigation_guard','obstacle_memory'):
             client=self.node.create_client(self.ListParameters,'/'+node+'/list_parameters')
             if not client.service_is_ready():
@@ -563,7 +572,8 @@ class NavigationRun:
             self.node.destroy_client(client)
         (self.e.directory/'parameters.json').write_text(json.dumps(dumps,indent=2)+'\n')
         endpoints={};incompat=[]
-        for topic in ('/tf','/tf_static','/scan','/imu/data','/camera/depth/image_rect_raw','/perception/health','/perception/memory','/cmd_vel','/sim/ground_truth'):
+        for topic in ('/tf','/tf_static','/scan','/imu/data','/camera/depth/image_rect_raw','/perception/health','/perception/memory',
+                      '/cmd_vel/smoothed','/cmd_vel','/sim/ground_truth'):
             pubs=self.node.get_publishers_info_by_topic(topic);subs=self.node.get_subscriptions_info_by_topic(topic)
             endpoints[topic]={'publishers':[p.node_name for p in pubs],'subscribers':[s.node_name for s in subs],
                 'publisher_endpoints':[{'node':p.node_name,'namespace':p.node_namespace,'gid':bytes(p.endpoint_gid).hex()} for p in pubs]}
@@ -572,11 +582,13 @@ class NavigationRun:
                     if qos_check_compatible(p.qos_profile,s.qos_profile)[0]==QoSCompatibility.ERROR:
                         incompat.append([topic,p.node_name,s.node_name])
         self.e.detail('I0.qos_and_command_ownership',not incompat and endpoints['/cmd_vel']['publishers']==['navigation_guard']
+                      and endpoints['/cmd_vel/smoothed']['publishers']==['velocity_smoother']
                       and sorted(endpoints['/sim/ground_truth']['subscribers']) == sorted([self.node.get_name(), self.odom_node.get_name()]),endpoints=endpoints,incompatible=incompat)
         self.authority('slam_toolbox' if self.mode=='slam' else 'amcl')
-        names=('omslam_navigation','omslam_navigation_contracts','nav2_smac_planner','omslam_sim','omslam_description','omslam_base',
+        names=('omslam_navigation','omslam_navigation_contracts','omslam_sim','omslam_description','omslam_base',
                'omslam_localization','omslam_mapping','omm_perception','omm_perception_msgs','omm_costmap_layers')
         prefixes={name:str(Path(get_package_prefix(name)).resolve()) for name in names}
+        smac_prefix=str(Path(get_package_prefix('nav2_smac_planner')).resolve())
         planner_processes=[]
         for process in Path('/proc').iterdir():
             if not process.name.isdigit():continue
@@ -588,24 +600,28 @@ class NavigationRun:
                                   if 'libnav2_smac_planner' in line and line.split()[-1].startswith('/')})
                 planner_processes.append({'pid':int(process.name),'executable':str(executable),'smac_libraries':libraries})
             except (ProcessLookupError,PermissionError,FileNotFoundError):continue
-        expected_library=WORKSPACE/'install/nav2_smac_planner/lib/libnav2_smac_planner_lattice.so'
-        self.e.detail('I0.loaded_smac_library',len(planner_processes)==1
-                      and str(expected_library) in planner_processes[0]['smac_libraries']
-                      and all(Path(p).is_relative_to(WORKSPACE/'install/nav2_smac_planner')
-                              for p in planner_processes[0]['smac_libraries']),processes=planner_processes,
-                      expected_library=str(expected_library),sha256=digest(expected_library))
+        smac_release=ET.fromstring(SMAC_MANIFEST.read_text()).findtext('version')
+        smac_files={str(path):digest(path) for path in (SMAC_LIBRARY,SMAC_MANIFEST,lattice.resolve(),STOCK_DIFF_PRIMITIVE)}
+        self.e.detail('I0.loaded_smac_library',smac_prefix==str(SYSTEM_PREFIX) and len(planner_processes)==1
+                      and str(SMAC_LIBRARY) in planner_processes[0]['smac_libraries']
+                      and all(Path(p).is_relative_to(SYSTEM_PREFIX/'lib') for p in planner_processes[0]['smac_libraries']),
+                      processes=planner_processes,expected_library=str(SMAC_LIBRARY),smac_prefix=smac_prefix,
+                      smac_release=smac_release,sha256=smac_files)
         files={str(p):digest(p) for name in names for p in Path(prefixes[name]).rglob('*') if p.is_file() and p.suffix in ('.py','.yaml','.xml','.json','.so','.sdf')}
         manifest={'source_sha256':package_source_hashes(),'installed_sha256':files,'prefixes':prefixes,
+                  'system_smac':{'prefix':smac_prefix,'release':smac_release,'sha256':smac_files},
                   'planner_processes':planner_processes,
                   'build_manifest':str(self.build_manifest),'course_sha256':digest(WORKSPACE/'tools/p4_course.json'),
                   'domain':os.environ['ROS_DOMAIN_ID'],'gz_partition':os.environ['GZ_PARTITION'],'verifier_sha256':digest(__file__)}
         (self.e.directory/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-        nav=Path(get_package_share_directory('omslam_navigation'));lattice=nav/'config/lattice/diff_5cm_16h_r0p5.json'
         meta=json.loads(lattice.read_text())['lattice_metadata']
         self.e.check('V4-01',all(Path(prefixes[n])==WORKSPACE/'install'/n for n in names)
-                     and digest(lattice)=='105b37351d15e340cc2921fa8878c8ea727a65cd7e89c39c977be0654be3b2a9'
+                     and smac_prefix==str(SYSTEM_PREFIX) and bool(smac_release)
+                     and self.e.data['details']['I0.loaded_smac_library']['status']=='PASS'
+                     and digest(lattice)==LATTICE_SHA256 and smac_files[str(STOCK_DIFF_PRIMITIVE)]==LATTICE_SHA256
                      and meta['motion_model']=='diff' and meta['grid_resolution']==.05 and meta['num_of_headings']==16,
-                     parameters_file='parameters.json',lattice_metadata=meta)
+                     parameters_file='parameters.json',lattice_metadata=meta,prefixes=prefixes,
+                     smac_prefix=smac_prefix,smac_release=smac_release,smac_sha256=smac_files)
 
     def authority(self,expected):
         nodes=self.node.get_node_names();backends=[name for name in nodes if name in ('slam_toolbox','amcl')]
@@ -1232,8 +1248,7 @@ class NavigationRun:
                 self.pump()
             self.move_object('crossing',spec['end']);self.wait_sim(1.);self.remove_object('crossing')
             self.finish_goal()
-            states=[msg.action_type for wall,msg in self.samples['/collision_monitor_state']]
-            self.metrics['dynamic_event']={'start':start,'end':self.sim_time,'monitor_actions':sorted(set(states)),'clearance_at_insertion':clearance}
+            self.metrics['dynamic_event']={'start':start,'end':self.sim_time,'clearance_at_insertion':clearance}
         if wanted & {'V4-10','V4-12'}:
             self.stage='I9';self.fault_event('depth',[2,4,math.pi],[2.5,2.7,3.8,4.2],'I9',recover_goal=False)
             self.stage='I10';self.enable(True);self.stationary('I10_enable_without_goal',1.);self.goto([2,4,math.pi],'I10')

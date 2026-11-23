@@ -9,14 +9,26 @@ from omslam_navigation.operator_control import OperatorControl
 from omslam_operator_msgs.srv import SetSpeedLimit
 
 
+# Installed simulation profile, computed from 70 RPM and the 0.068 m wheel radius.
+PROFILE_VX = 2 * math.pi * .068 * 70. / 60.
+PROFILE_WZ = .5
+
+
+def outer_wheel_rpm(v, w):
+    return (abs(v) + abs(w) * .480 / 2) / .068 * 30 / math.pi
+
+
 @pytest.mark.parametrize('mode', ['MANUAL', 'AUTO'])
 def test_rpm_limit_caps_turning_wheels_and_preserves_curvature(mode):
-    g = OperatorGate(Limits(max_vx=.24923301718479027, max_wz=.5))
+    g = OperatorGate(Limits(max_vx=PROFILE_VX, max_wz=PROFILE_WZ))
+    assert g.geometry.max_rpm == 70.
     g.mode = mode
     g.speed_percent = 37.5
     g.linear_limit = g.limits.max_vx * .375
     g.angular_limit = g.limits.max_wz * .375
     g.wheel_rpm_limit = g.geometry.max_rpm * .375
+    # The profile's own linear and angular limits overdrive the outer wheel.
+    assert outer_wheel_rpm(g.linear_limit, g.angular_limit) > g.wheel_rpm_limit * 1.1
     v, _, _, _, _, w = g.limit_values((g.linear_limit,0.,0.,0.,0.,g.angular_limit))
     assert w/v == pytest.approx(g.angular_limit/g.linear_limit)
     assert max(abs(r) for r in g.geometry.rpm(v,w)) == pytest.approx(g.wheel_rpm_limit)

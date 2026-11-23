@@ -77,14 +77,14 @@ class NavigationGuard(Node):
             'clock_stall_timeout': 0.30, 'recovery_healthy_time': 1.0,
             'service_timeout': 2.0, 'readiness_timeout': 30.0,
             'map_jump_translation': 0.10, 'map_jump_rotation': 0.10,
-            'max_linear_velocity': SIM_MAX_LINEAR_VELOCITY, 'max_angular_velocity': 0.60,
+            'max_linear_velocity': SIM_MAX_LINEAR_VELOCITY, 'max_angular_velocity': 0.50,
             'future_tf_tolerance': 1.0,
             'operator_enabled': False,
             'keepout_file': '',
             'manual_reverse_enabled': False,
             'rear_observation_verified': False,
-            'lifecycle_nodes': ['collision_monitor', 'velocity_smoother', 'planner_server',
-                                'controller_server', 'behavior_server', 'bt_navigator'],
+            'lifecycle_nodes': ['velocity_smoother', 'planner_server', 'controller_server',
+                                'behavior_server', 'bt_navigator'],
         }
         for key, value in defaults.items():
             self.declare_parameter(key, value)
@@ -153,7 +153,7 @@ class NavigationGuard(Node):
         self.state_pub = self.create_publisher(String, '/navigation/state', transient)
         self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
         self.create_subscription(TwistStamped, '/cmd_vel/nav', self.on_requested, 1)
-        self.create_subscription(TwistStamped, '/cmd_vel/monitored', self.on_final, 1)
+        self.create_subscription(TwistStamped, '/cmd_vel/smoothed', self.on_final, 1)
         self.create_subscription(ClockMessage, '/clock', self.on_clock, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self.on_scan, qos_profile_sensor_data)
         # Match the simulation publisher and perception: dropped best-effort
@@ -547,9 +547,9 @@ class NavigationGuard(Node):
         if wall - self.last_graph_check < 1.0:
             return
         self.last_graph_check = wall
-        expected = {'/cmd_vel': 'navigation_guard'}
+        expected = {'/cmd_vel/smoothed': 'velocity_smoother', '/cmd_vel': 'navigation_guard'}
         missing = []
-        for topic in ('/cmd_vel', '/scan', '/camera/depth/image_rect_raw',
+        for topic in ('/cmd_vel/smoothed', '/cmd_vel', '/scan', '/camera/depth/image_rect_raw',
                       '/imu/data', '/odom', '/wheel/odometry', '/perception/health',
                       '/perception/memory', '/perception/memory_status'):
             publishers = self.get_publishers_info_by_topic(topic)
@@ -641,7 +641,7 @@ class NavigationGuard(Node):
         if (self.scan_tf is None or not 0 <= (ros_ns - self.scan_tf.stamp) * 1e-9 < self.p['scan_timeout'] or
                 not 0 <= wall - self.scan_tf.received < self.p['scan_timeout']):
             missing.append('scan-time odom transform unavailable')
-        required_servers = self.servers if mode == 'AUTO' else ['collision_monitor', 'velocity_smoother']
+        required_servers = self.servers if mode == 'AUTO' else ['velocity_smoother']
         for name in required_servers:
             state, received = self.states[name]
             if state != State.PRIMARY_STATE_ACTIVE or wall - received >= self.p['service_timeout']:

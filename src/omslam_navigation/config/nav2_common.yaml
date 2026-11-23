@@ -1,4 +1,4 @@
-# Nav2 1.3.13 interfaces and plugin topology. Motion/timing initial values live
+# Jazzy Nav2 1.3.14 interfaces and plugin topology. Motion/timing initial values live
 # in sim_profile.yaml. Launch merges both, validates, then resolves asset paths.
 bt_navigator:
   ros__parameters:
@@ -163,52 +163,10 @@ velocity_smoother:
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
 
-collision_monitor:
-  ros__parameters:
-    use_sim_time: true
-    enable_stamped_cmd_vel: true
-    base_frame_id: base_footprint
-    odom_frame_id: odom
-    cmd_vel_in_topic: /cmd_vel/smoothed
-    cmd_vel_out_topic: /cmd_vel/monitored
-    state_topic: /collision_monitor_state
-    base_shift_correction: true
-    polygons: [Stop, Approach]
-    Stop:
-      type: polygon
-      action_type: stop
-      points: '[[0.31,0.28],[0.31,-0.28],[-0.41,-0.28],[-0.41,0.28]]'
-      min_points: 1
-      enabled: true
-      visualize: true
-      polygon_pub_topic: /collision_monitor/stop_polygon
-    Approach:
-      type: polygon
-      action_type: approach
-      # Static padded footprint avoids waiting for a costmap footprint during
-      # downstream-first lifecycle activation; launch verifies exact agreement.
-      points: '[[0.11,0.28],[0.11,-0.28],[-0.41,-0.28],[-0.41,0.28]]'
-      min_points: 1
-      enabled: true
-      visualize: true
-      polygon_pub_topic: /collision_monitor/approach_polygon
-    observation_sources: [scan, obstacles]
-    scan:
-      type: scan
-      topic: /scan
-      enabled: true
-    obstacles:
-      type: pointcloud
-      topic: /perception/obstacles
-      min_height: 0.02
-      max_height: 0.30
-      use_global_height: false
-      enabled: true
-
 lifecycle_manager_navigation:
   ros__parameters:
     use_sim_time: true
     autostart: true
-    node_names: [collision_monitor, velocity_smoother, planner_server, controller_server, behavior_server, bt_navigator]
+    node_names: [velocity_smoother, planner_server, controller_server, behavior_server, bt_navigator]
     bond_timeout: 4.0
     attempt_respawn_reconnection: false

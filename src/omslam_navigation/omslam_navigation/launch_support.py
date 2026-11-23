@@ -23,9 +23,11 @@ from launch_ros.actions import Node
 FOOTPRINT = [[0.09, 0.26], [0.09, -0.26], [-0.39, -0.26], [-0.39, 0.26]]
 PADDED_FOOTPRINT = [[0.11, 0.28], [0.11, -0.28], [-0.41, -0.28], [-0.41, 0.28]]
 NAVIGATION_NODES = [
-    'collision_monitor', 'velocity_smoother', 'planner_server', 'controller_server',
-    'behavior_server', 'bt_navigator',
+    'velocity_smoother', 'planner_server', 'controller_server', 'behavior_server', 'bt_navigator',
 ]
+# Parameters that only the removed Smac fork declared. Stock Jazzy ignores an
+# undeclared override, so accepting it would silently imply a planner contract.
+UNSUPPORTED_PLANNER_PARAMETERS = ('xy_goal_tolerance',)
 LATTICE_SHA256 = '105b37351d15e340cc2921fa8878c8ea727a65cd7e89c39c977be0654be3b2a9'
 
 
@@ -158,7 +160,6 @@ def validate_configuration(configuration, share):
     planner = c['planner_server']['ros__parameters']
     controller = c['controller_server']['ros__parameters']
     smoother = c['velocity_smoother']['ros__parameters']
-    monitor = c['collision_monitor']['ros__parameters']
     guard = c['navigation_guard']['ros__parameters']
     bt = c['bt_navigator']['ros__parameters']
     behavior = c['behavior_server']['ros__parameters']
@@ -175,6 +176,9 @@ def validate_configuration(configuration, share):
     _required_equal(planner['GridBased']['plugin'], 'nav2_smac_planner::SmacPlannerLattice', 'planner plugin')
     _required_equal(planner['GridBased']['allow_unknown'], False, 'allow_unknown')
     _required_equal(planner['GridBased']['allow_reverse_expansion'], False, 'allow_reverse_expansion')
+    for name in UNSUPPORTED_PLANNER_PARAMETERS:
+        if name in planner['GridBased']:
+            raise ValueError(f'GridBased.{name} is not a stock Jazzy Smac Lattice parameter')
     _required_equal(controller['controller_plugins'], ['FollowPath'], 'controller_plugins')
     _required_equal(controller['goal_checker_plugins'], ['goal_checker'], 'goal_checker_plugins')
     _required_equal(controller['progress_checker_plugins'], ['progress_checker'], 'progress_checker_plugins')
@@ -208,11 +212,10 @@ def validate_configuration(configuration, share):
                                'goal stopped translation velocity', 0.000001, 0.01)
     _number(controller['goal_checker']['rot_stopped_velocity'],
             'goal stopped rotation velocity', 0.000001, 0.02)
-    # The goal checker is the single source for approach/alignment thresholds.
-    # Smac's existing `tolerance` remains an independent A* search fallback.
+    # The goal checker is the single source for DWB approach/alignment
+    # thresholds. Smac's `tolerance` remains an independent A* search fallback.
     # Revalidation must reject a contradictory resolved configuration as well.
     for params, field, value, label in [
-        (planner['GridBased'], 'xy_goal_tolerance', xy_tolerance, 'planner terminal XY'),
         (dwb, 'xy_goal_tolerance', xy_tolerance, 'DWB terminal XY'),
         (dwb, 'trans_stopped_velocity', stopped_velocity, 'DWB stopped translation'),
     ]:
@@ -228,7 +231,7 @@ def validate_configuration(configuration, share):
     _required_equal(lifecycle['attempt_respawn_reconnection'], False, 'automatic reconnection')
     _required_equal(lifecycle['autostart'], True, 'Nav2 lifecycle autostart')
     _required_equal(guard['lifecycle_nodes'], NAVIGATION_NODES, 'guard lifecycle_nodes')
-    for params, name in [(controller, 'controller'), (smoother, 'smoother'), (monitor, 'monitor')]:
+    for params, name in [(controller, 'controller'), (smoother, 'smoother')]:
         _required_equal(params['enable_stamped_cmd_vel'], True, name + '.enable_stamped_cmd_vel')
     _required_equal(smoother['stamp_smoothed_velocity_with_smoothing_time'], False, 'stamp preservation')
     _required_equal(smoother['feedback'], 'OPEN_LOOP', 'smoother feedback')
@@ -236,32 +239,6 @@ def validate_configuration(configuration, share):
     _required_equal(smoother['max_velocity'], [vx, 0.0, wz], 'smoother max_velocity')
     _required_equal(smoother['deadband_velocity'], [0.0, 0.0, 0.0], 'smoother deadband')
     _number(smoother['velocity_timeout'], 'velocity_timeout', 0.001, 0.30)
-    _required_equal(monitor['cmd_vel_in_topic'], '/cmd_vel/smoothed', 'monitor input')
-    _required_equal(monitor['cmd_vel_out_topic'], '/cmd_vel/monitored', 'monitor output')
-    _required_equal(monitor['base_frame_id'], 'base_footprint', 'monitor base frame')
-    _required_equal(monitor['odom_frame_id'], 'odom', 'monitor odom frame')
-    _required_equal(monitor['observation_sources'], ['scan', 'obstacles'], 'monitor sources')
-    _required_equal(monitor['scan']['topic'], '/scan', 'monitor scan')
-    _required_equal(monitor['obstacles']['topic'], '/perception/obstacles', 'monitor obstacles')
-    for source, source_type in [('scan', 'scan'), ('obstacles', 'pointcloud')]:
-        _required_equal(monitor[source]['type'], source_type, source + '.type')
-        _required_equal(monitor[source]['enabled'], True, source + '.enabled')
-    _required_equal(monitor['obstacles']['min_height'], 0.02, 'monitor obstacle minimum height')
-    _required_equal(monitor['obstacles']['max_height'], 0.30, 'monitor obstacle maximum height')
-    _required_equal(monitor['obstacles']['use_global_height'], False, 'monitor obstacle height frame')
-    _required_equal(monitor['polygons'], ['Stop', 'Approach'], 'monitor polygons')
-    _required_equal(monitor['Stop']['action_type'], 'stop', 'monitor Stop')
-    _required_equal(monitor['Approach']['action_type'], 'approach', 'monitor Approach')
-    _required_equal(json.loads(monitor['Approach']['points']), PADDED_FOOTPRINT, 'monitor footprint')
-    rear_stop = -0.61 if reverse else -0.41
-    _required_equal(json.loads(monitor['Stop']['points']),
-                    [[0.31, 0.28], [0.31, -0.28], [rear_stop, -0.28], [rear_stop, 0.28]], 'stop zone')
-    for zone in ['Stop', 'Approach']:
-        _required_equal(monitor[zone]['enabled'], True, zone + '.enabled')
-        _required_equal(monitor[zone]['min_points'], 1, zone + '.min_points')
-    _number(monitor['source_timeout'], 'monitor source_timeout', 0.001, 0.30)
-    _number(monitor['Approach']['time_before_collision'], 'approach time_before_collision', 1.5)
-    _number(monitor['Approach']['simulation_time_step'], 'approach simulation_time_step', 0.001, 0.05)
     for key in ['scan_timeout', 'depth_timeout', 'health_timeout']:
         _number(guard[key], 'guard.' + key, 0.001, 0.30)
     _required_equal(guard['max_linear_velocity'], vx, 'guard linear limit')
@@ -424,7 +401,6 @@ def _start(context, mode):
                         name='obstacle_memory', output='screen',
                         parameters=[str(share / 'config/perception.yaml')]))
     for package, executable, name, remappings in [
-        ('nav2_collision_monitor', 'collision_monitor', 'collision_monitor', []),
         ('nav2_velocity_smoother', 'velocity_smoother', 'velocity_smoother',
          [('cmd_vel', '/cmd_vel/requested'), ('cmd_vel_smoothed', '/cmd_vel/smoothed')]),
         ('nav2_planner', 'planner_server', 'planner_server', []),

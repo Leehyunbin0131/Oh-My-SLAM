@@ -66,14 +66,27 @@ def test_coupled_wheel_limit_and_zero_watermark():
     assert g.sample(10.04)==(0.,0.)
 
 
-def test_simulation_default_accepts_42_rpm_straight_before_expiring():
+def test_simulation_default_accepts_70_rpm_straight_before_expiring():
     guard = active_guard()
-    maximum = 2 * math.pi * .068 * 42 / 60
+    maximum = 2 * math.pi * .068 * 70 / 60
     command(guard, vx=maximum, wz=0.)
-    assert guard.geometry.max_rpm == 42.
+    assert guard.geometry.max_rpm == 70.
     assert guard.sample(10.02) == pytest.approx((maximum, 0.))
-    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((42., 42.))
+    assert guard.geometry.rpm(*guard.sample(10.02)) == pytest.approx((70., 70.))
     assert guard.sample(10.32) == (0., 0.)
+
+
+def test_profile_linear_and_angular_limits_scale_both_wheels_at_70_rpm():
+    guard = active_guard()
+    # Installed Nav2 profile limits: full straight speed plus 0.5 rad/s yaw.
+    vx, wz = 2 * math.pi * .068 * 70 / 60, .5
+    outer = (vx + wz * .480 / 2) / .068 * 30 / math.pi
+    assert outer > 70. * 1.1
+    command(guard, vx=vx, wz=wz)
+    out_vx, out_wz = guard.sample(10.02)
+    assert out_wz / out_vx == pytest.approx(wz / vx)
+    assert out_vx < vx and out_wz < wz
+    assert max(abs(r) for r in guard.geometry.rpm(out_vx, out_wz)) == pytest.approx(70.)
 
 
 def test_rewind_requires_new_wheel_sample_and_lifecycle_activation():
@@ -137,7 +150,7 @@ def test_wheel_odometry_keeps_payload_and_uses_covariance_cached_at_configure():
     from omslam_sim.sim_base import SimBase
 
     params = {'use_sim_time': True, 'left_radius': .068, 'right_radius': .068, 'wheel_separation': .480,
-              'max_rpm': 42., 'clock_stall_timeout': .3, 'wheel_vx_variance': .0004, 'wheel_wz_variance': .0009}
+              'max_rpm': 70., 'clock_stall_timeout': .3, 'wheel_vx_variance': .0004, 'wheel_wz_variance': .0009}
     published = []
     node = SimpleNamespace(val=params.__getitem__, configured=False, latest_clock=None, clock_advanced_at=None,
                            guard=SimCommandGuard(),
