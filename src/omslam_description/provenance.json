@@ -37,7 +37,7 @@
     "ros/oh_my_mobilerobot_description/urdf/base.urdf": "740befd089cef25218a6d62f1d8191257a35b9fa291ab8f42c684d8f3c683cc8"
   },
   "simulation_adapter_reference": {
-    "path": "/home/hyunlee/MyRos/mobile_robot_sim/src/oh_my_mobilerobot_sim/oh_my_mobilerobot_sim/model.py",
+    "path": "mobile_robot_sim/src/oh_my_mobilerobot_sim/oh_my_mobilerobot_sim/model.py",
     "sha256": "179583985bc216e07fbbce9b827d51cbc06d6ac01639313932314bcd413d2798",
     "modifications": "Standalone installed description API, explicit imu_link, 95 RPM operating ceiling, wheel-only odometry with no ROS TF bridge; no truth input to estimator"
   }

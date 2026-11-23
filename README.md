@@ -50,7 +50,7 @@
 flowchart LR
     subgraph Upper["상위 주행 · 인지 (ROS 2 Jazzy)"]
         Nav["수동 조종 / Nav2\n(State Lattice + DWB)"]
-        Safety["Velocity Smoother\n+ Collision Monitor"]
+        Safety["Velocity Smoother\n+ Navigation Guard"]
         SLAM["slam_toolbox / AMCL\n+ RGB-D 낮은 장애물 기억"]
     end
 
@@ -74,7 +74,7 @@ flowchart LR
 | **하위 구동 (MCU)** | `Arduino Mega 2560` + [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control) | 1 kHz 속도 PID 제어, 정지 위치 유지(`HOLD`), 300 ms 명령 유효기간 감시, 20 Hz 엔코더 피드백 |
 | **ROS 2 베이스 브리지** | `omslam_base` (`LifecycleNode`) | `/cmd_vel`(`TwistStamped`) 수신·원본 수명 검사, 좌우 바퀴 목표 RPM 변환, 실측 `/wheel/odometry`·`/joint_states` 발행 |
 | **상태 추정 · 지도** | `robot_localization`, `slam_toolbox`, `AMCL` | 바퀴 오도메트리 + IMU 각속도 EKF 융합(`odom → base_footprint`), 실시간 지도 작성 또는 저장 지도 위치추정(`map → odom`) |
-| **경로 계획 · 안전** | `Nav2`, `omm_perception`, `omm_costmap_layers` | 기본 움직임·차체 외곽을 고려한 전역 경로(`State Lattice`), 지역 궤적 평가·경로 추종(`DWB`), RGB-D 낮은 장애물 기억, `Collision Monitor` 최종 감속/정지 |
+| **경로 계획 · 안전** | `Nav2`, `omm_perception`, `omm_costmap_layers` | 기본 움직임·차체 외곽을 고려한 전역 경로(`State Lattice`), 지역 궤적 평가·경로 추종(`DWB`), RGB-D 낮은 장애물 기억, `Velocity Smoother`·`navigation_guard` 최종 관측·명령 차단 |
 
 <a id="roadmap"></a>
 

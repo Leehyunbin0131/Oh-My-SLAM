@@ -13,7 +13,7 @@ Arduino Mega 2560 하위 구동 제어기와 상위 ROS 2 자율주행 스택(`r
 | `omslam_base` | ROS 명령 수명, 차동구동 변환, 백엔드 선택, 측정 odom·joint states·진단 | 신규 |
 | `robot_localization` | 바퀴 측정과 검증된 IMU yaw rate 결합 | ROS 기존 패키지 설정 |
 | `slam_toolbox` / AMCL | 지도 작성 또는 저장 지도 위치추정 | 모드별 하나 선택 |
-| Nav2 | 전역 경로·지역 추종·속도 평활·충돌 감시 | 공통 설정과 장비별 제한 분리 |
+| Nav2 | 전역 경로·지역 추종·속도 평활 | 공통 설정과 장비별 제한 분리 |
 
 **1차 구현은 `rclpy` 브리지로 결정합니다.** 이미 검증한 Python 프로토콜·보정·구동 코드를 재사용할 수 있고, Nav2에 필요한 표준 속도 명령·odom·TF를 제공할 수 있기 때문입니다. 메가의 제어 주기는 ROS executor의 실행 주기와 독립적입니다.
 
@@ -26,8 +26,8 @@ flowchart TD
     T[수동 조종] --> S[명령 소스 선택·원본 시각 기록]
     N[Nav2 controller / behavior] --> S
     S --> V[Velocity Smoother]
-    V --> C[Collision Monitor]
-    C --> B[omslam_base: 수명·장치 상태 검사]
+    V --> F[navigation_guard: 관측·명령 최종 차단]
+    F --> B[omslam_base: 수명·장치 상태 검사]
     S -. 원본 명령 신선도 .-> B
     B --> H[실물: WheelDrive → MotorClient → Mega]
     B --> G[시뮬레이션: Gazebo DiffDrive]
@@ -42,13 +42,13 @@ flowchart TD
     M --> N
     D[깊이·IMU: 바닥과 낮은 장애물] --> K[지역·전역 costmap / 관측 상태]
     K --> N
-    R --> C
-    D --> C
+    R --> F
+    D --> F
 ```
 
 수동·자율 모드는 명시적으로 전환합니다. 동시에 들어온 명령을 임의로 합치지 않습니다. 초기 구현은 모드별 고정 소스 하나를 선택하며, 조종기와 Nav2의 경쟁이 필요 없는 구조로 시작합니다.
 
-Collision Monitor가 **마지막 속도 평활·장애물 처리 노드**가 됩니다. 그 뒤의 base 브리지는 유효 명령의 단위 변환·상한 축소·차단만 수행하고, 감속 또는 0 명령을 다시 가속하지 않습니다. 실제 센서가 없는 순수 모의 장치 시험은 별도 프로파일로 분리합니다. [Nav2 Collision Monitor 연결](https://docs.nav2.org/jazzy/tutorials/general_tutorials/using_collision_monitor/using_collision_monitor/)
+`Velocity Smoother`가 속도 평활을 담당하고, `navigation_guard`가 센서 관측·원본 명령 신선도·실행 상태를 확인하는 **최종 명령 차단 노드**가 됩니다. 그 뒤의 base 브리지는 유효 명령의 단위 변환·상한 축소·최소 구동 하한(3.0 RPM 데드밴드 컷)·차단만 수행하고, 감속 또는 0 명령을 다시 가속하지 않습니다. 실제 센서가 없는 순수 모의 장치 시험은 별도 프로파일로 분리합니다.
 
 ## 3. 원본 명령 수명과 정지
 
@@ -56,7 +56,7 @@ Collision Monitor가 **마지막 속도 평활·장애물 처리 노드**가 됩
 
 - 속도 체인은 `geometry_msgs/msg/TwistStamped`를 기준으로 통일합니다. Jazzy 기본값이 `Twist`인 노드는 `enable_stamped_cmd_vel=true`를 명시하고 설치된 버전에서 실제 지원을 확인합니다.
 - 키보드가 `Twist`만 제공하면 입력 어댑터에서 처음 한 번 stamp를 부여합니다. 노트북 수동 조종의 입력이 끊겼는데 같은 명령을 영구 재생하는 기능은 허용하지 않습니다.
-- 원본 timestamp는 smoother·collision monitor·base를 지나는 동안 보존합니다. smoother의 timestamp 갱신 기능은 끕니다. 설치 버전에서 설정 이름과 출력 보존 동작을 P1에서 확인합니다.
+- 원본 timestamp는 smoother·navigation_guard·base를 지나는 동안 보존합니다. smoother의 timestamp 갱신 기능은 끕니다. 설치 버전에서 설정 이름과 출력 보존 동작을 P1에서 확인합니다.
 - base는 원본 입력의 나이를 ROS 시각으로 검사한 뒤 같은 프로세스의 monotonic deadline으로 관리합니다. 장치 I/O의 deadline을 `/clock`이나 시스템 시각 점프에 맡기지 않습니다.
 - base는 NaN/Inf, 지원하지 않는 횡이동·roll/pitch 속도, 유효하지 않은 frame을 거부합니다. `base_footprint` 기준으로 통일하고 `base_link` 입력을 허용할 때는 두 프레임의 고정 관계를 확인합니다.
 - 시뮬레이션은 ROS 시각을 사용하되, 정지·재시작 시 저장한 명령을 폐기합니다. 실물 백엔드는 `use_sim_time=true` 구성을 거부합니다.
@@ -80,7 +80,7 @@ Collision Monitor가 **마지막 속도 평활·장애물 처리 노드**가 됩
 | MCU가 허용하는 100 ms보다 lease가 짧음 | 추가 송신 중단, 마지막 lease의 만료 보장 |
 | 장애물 또는 명시적 정지 출력 | 일반 송신 주기보다 즉시 우선 처리. 원본 deadline 안에 유효한 0 RPM lease를 만들 수 없으면 즉시 `STOP` |
 | 피드백 400 ms 중단·MCU fault·프로토콜 오류 | 출력 해제 시도, fault 상태 고정, 명시적 복구 전 재구동 금지 |
-| 입력 소스 또는 Collision Monitor 중단 | 원본/최종 명령 신선도 각각 확인 후 차단 |
+| 입력 소스 또는 Velocity Smoother 중단 | 원본/최종 명령 신선도 각각 확인 후 차단 |
 | deactivate·종료·재접속·MCU 재부팅 | 과거 목표 폐기, 새 식별·피드백·활성화·새 명령 필요 |
 
 원본 명령 토픽도 감시하여 smoother가 timeout 후 생성한 새 stamp의 0 메시지를 새 운전자 의도로 오인하지 않습니다. 정상 정지와 장애물 정지는 유효한 소스가 있는 동안 HOLD할 수 있지만, 소스 단절은 출력 해제입니다. Nav2 목표 종료 뒤 0 출력이 끝나도 최종적으로 정지·출력 해제 상태여야 합니다.
@@ -130,9 +130,8 @@ SE(2) 원호 적분을 사용하고 회전량이 매우 작은 경우 직선 극
 | --- | --- | --- | --- |
 | `/cmd_vel/teleop`, `/cmd_vel/nav` | `TwistStamped` | 수동/자율 입력 → 소스 선택 | 새 의도 20 Hz 목표; reliable, volatile, depth 1 |
 | `/cmd_vel/requested` | `TwistStamped` | 선택 소스 → smoother·freshness 감시 | 원본 stamp 유지 |
-| `/cmd_vel/smoothed` | `TwistStamped` | smoother → collision monitor | 50 Hz 목표 |
-| `/cmd_vel/monitored` | `TwistStamped` | collision monitor → navigation guard 최종 차단 | monitor가 보존한 원본 stamp |
-| `/cmd_vel` | `TwistStamped` | navigation guard → base | 유효 원본 stamp; reliable, volatile, depth 1; guard 단독 발행 |
+| `/cmd_vel/smoothed` | `TwistStamped` | velocity_smoother → navigation_guard 최종 차단 | 50 Hz 목표, 원본 stamp 유지 |
+| `/cmd_vel` | `TwistStamped` | navigation_guard → base | 유효 원본 stamp; reliable, volatile, depth 1; guard 단독 발행 |
 | `/wheel/odometry` | `nav_msgs/Odometry` | base/sim → EKF | 새 측정 20 Hz 실물; reliable, volatile |
 | `/joint_states` | `sensor_msgs/JointState` | base/sim → robot_state_publisher | 새 측정에 맞춤 |
 | `/imu/data` | `sensor_msgs/Imu` | 선택 IMU → EKF | 장치 실제 주기; sensor-data QoS와 호환 |
@@ -197,7 +196,7 @@ Gazebo truth는 SLAM·EKF·Nav2 입력으로 사용하지 않습니다. 순수 �
 ## 8. Nav2·인지의 기본 선택
 
 - **공통 전역 계획·지역 제어 기준 (`State Lattice` + `DWB`)**: 시뮬레이션과 실물 모두 `nav2_smac_planner::SmacPlannerLattice` 전역 계획기와 `dwb_core::DWBLocalPlanner` 지역 제어기를 사용합니다. State Lattice는 위치·방향과 기본 움직임 집합으로 경로를 탐색하고, DWB는 현재 속도·주변 장애물에 맞는 지역 궤적을 평가해 명령을 선택합니다. 전역·지역 양쪽에 같은 기준의 사각형 footprint와 padding을 적용합니다.
-- **목표 접근·방향 정렬 계약**: launch는 도착 판정의 XY 허용오차를 Lattice와 DWB에 함께 전달합니다. 이 범위 안에서 Lattice는 현재 위치의 회전과 원래 목표까지의 짧은 연결을 footprint로 검사해 반환하며, 장애물과 unknown을 통과시키지 않습니다. 실제 성공은 원래 목표 방향과 측정 정지를 확인하는 `StoppedGoalChecker`가 판정합니다. 전역 탐색의 heuristic tolerance와 물리적 XY 도착 범위는 구분합니다.
+- **목표 접근·방향 정렬 계약**: 도착 판정의 XY 허용오차(기본 5 cm)는 `controller_server.goal_checker.xy_goal_tolerance` 한 곳에서 관리하며 launch가 같은 값을 DWB(`FollowPath.xy_goal_tolerance`)에 전달합니다. 전역 계획기는 공식 Jazzy `nav2_smac_planner::SmacPlannerLattice`를 사용하며 `GridBased.tolerance`(4 cm)는 A* 탐색 fallback 허용값으로 별도 의미를 가집니다. 실제 성공은 원래 목표 위치·방향과 측정 정지를 함께 확인하는 `StoppedGoalChecker`(`stateful=false`)가 판정합니다.
 - **DWB 구동·충돌 계약**: 차동구동의 측면 속도는 `vy=0`으로 고정합니다. 속도·가감속 한도는 검증된 구동 범위에 맞추고 base의 바퀴별 운용 범위(실물 3–95 RPM, 시뮬레이션 3–70 RPM)를 유지합니다. 사각형 footprint와 padding을 적용한 `ObstacleFootprint` critic을 필수로 사용하며, 충돌하는 후보는 경로·목표 비용이 낮아도 거부합니다. 경로 정렬·목표 도착·진동 억제 평가의 가중치와 속도 샘플은 P4의 코너·낮은 장애물·막힌 통로 시나리오에서 조정합니다. [DWB 설정](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/), [ObstacleFootprintCritic](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/trajectory_critics/obstacle_footprint/)
 - **기본 비용지도**: 표준 static·obstacle·inflation 레이어로 기본 주행을 먼저 구성합니다. 보로노이 전용 레이어와 중앙선 선호 검증은 초기 구현·인수 범위에서 제외합니다. 기본 주행 결과로 필요성이 확인되면 별도 변경 범위로 검토하며, 현재 단계의 완료 조건에 포함하지 않습니다.
 - **State Lattice 움직임 집합**: 사전 계산한 기본 움직임 집합(motion primitives / minimum control set)을 JSON으로 설치하고 `lattice_filepath`를 명시합니다. 차동구동 `diff` 모델과 전역 costmap의 격자 해상도를 맞추며, 초기 프로파일은 아래 표를 따릅니다. 움직임 집합·설정의 출처와 해시를 고정하고 PC·Orin에서 동일한 파일을 사용합니다. [Jazzy 움직임 집합 생성기](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_smac_planner/lattice_primitives/README.md)
@@ -229,7 +228,7 @@ P4에서 해당 움직임 집합으로 생성한 전역 경로와 DWB의 코너�
 | `base_check` | base·joint states·wheel odom, 필요 센서만 | 새 장치 식별·피드백·명시적 활성화·새 수동 명령 |
 | `manual_mapping` | base·센서·EKF·SLAM | 위 조건과 센서/TF 유효성; 자율 command source 미실행 |
 | `localization` | 센서·EKF·map_server·AMCL | 기본 구동 비활성, 위치추정 확인용 |
-| `navigation` | localization + Nav2 + smoother/collision monitor | 지도 위치 초기화·localization/센서 상태·Nav2 lifecycle·fresh command |
-| `slam_navigation` | EKF·SLAM + Nav2 + smoother/collision monitor | SLAM map/TF 준비·센서 상태·Nav2 lifecycle·fresh command |
+| `navigation` | localization + Nav2 + velocity_smoother/navigation_guard | 지도 위치 초기화·localization/센서 상태·Nav2 lifecycle·fresh command |
+| `slam_navigation` | EKF·SLAM + Nav2 + velocity_smoother/navigation_guard | SLAM map/TF 준비·센서 상태·Nav2 lifecycle·fresh command |
 
 기본 startup에서 base는 이동 명령을 받지 않습니다. 모드별 준비 조건이 충족된 뒤 활성화하고, 설정 변경·모드 전환 시 먼저 명령 수락을 해제합니다. 이전 입력이 큐나 latched 상태로 남아 재출발하지 않게 합니다. 센서 단절로 차단된 상태에서의 재개 조건도 모드별로 명시합니다.

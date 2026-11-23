@@ -8,7 +8,6 @@
 - 기존 `mobile_robot_sim`: `omm_perception_msgs`, `omm_perception`, `omm_costmap_layers`의 인지·장애물 기억 부분을 선택 이관합니다. 각 패키지의 Apache-2.0 LICENSE와 `provenance.json`에 원본 경로·파일별 SHA-256을 보존합니다. 모델/기존 sim 구성은 이 인지 패키지의 라이선스로 재분류하지 않습니다.
 - State Lattice 움직임 집합: Navigation2 1.3.13의 `5cm_resolution/0.5m_turning_radius/diff/output.json`을 변경 없이 포함합니다. Apache-2.0 LICENSE·원본 경로·SHA-256은 `src/omslam_navigation/config/lattice/`에 설치합니다.
 - RViz 설정: `omslam_navigation/rviz/navigation.rviz`는 Navigation2 1.3.13의 `nav2_bringup/rviz/nav2_default_view.rviz`에서 Selector·Docking 패널을 제외한 Apache-2.0 파생 설정입니다. 원본 SHA-256은 파일 머리말에 기록합니다.
-- `nav2_smac_planner`: Navigation2 1.3.13의 고정 커밋 `f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501`에서 패키지를 포함합니다. 연속 격자 좌표를 충돌 검사까지 보존하는 패치, 지도 밖 smoothing 경계 곡선의 배열 접근 방지 패치와 출처 설치 규칙을 적용했습니다. 원본 Apache-2.0 LICENSE·파일별 원본/변경 해시·패치는 `src/nav2_smac_planner/`에 보존하고 패키지 share에 설치합니다. 패키지와 공개 플러그인 이름은 원본을 유지합니다.
 - 공항 geometry·가구·표지·생성기·보행자 제어 플러그인: 이 프로젝트에서 작성한 Apache-2.0 자산·코드.
 - 보행자 `walk.dae`: Gazebo Fuel Mingfei/actor version 1, CC BY 4.0. 원본은 변경하지 않았으며 출처·라이선스·해시는 `src/omslam_sim/models/omslam_pedestrian/NOTICE`와 `asset_manifest.json`에 기록합니다.
 - `airport_gui_ogre.config`, `airport_gui_ogre2.config`: Gazebo Sim 8.15.0의 기본 `gui/gui.config`에서 창 크기·카메라·색·렌더러·초기 대화상자 설정을 변경했습니다. Gazebo Sim 프로젝트의 Apache-2.0 출처는 https://github.com/gazebosim/gz-sim 입니다.

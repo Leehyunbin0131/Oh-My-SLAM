@@ -45,7 +45,7 @@ V1의 모의 환경에서 한 번 확인할 항목:
 - 원본 publisher가 멈췄지만 smoother가 같은 명령을 계속 출력하는 경우.
 - 원본 시각이 유지된 여러 평활 출력, 큐에서 지연된 명령, 오래된 메시지의 지연 도착.
 - zero 명령 이후 늦게 도착한 nonzero, mode 전환 전의 저장 명령.
-- 원본 age가 200 ms를 넘긴 뒤 들어온 Collision Monitor의 zero: 최소 lease 때문에 생략하지 않고 즉시 `STOP`하는지.
+- 원본 age가 200 ms를 넘긴 뒤 들어온 긴급/차단 zero: 최소 lease 때문에 생략하지 않고 즉시 `STOP`하는지.
 - 피드백 단절, CRC/프레임 오류, MCU fault, MCU clock 재시작·정상 wrap.
 - deactivate/reconnect 뒤 fresh 명령 없이 이동하지 않는지.
 

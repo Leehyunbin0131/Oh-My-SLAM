@@ -10,7 +10,7 @@ P1은 **모터 정지(1번)**, **도착과 출발 자세 검사(8·9번)**, **�
 | --- | --- | --- |
 | 1–4 | 정지 접수 후 이전 바퀴 명령을 폐기하고, MCU 고장 또는 시계 되감기 뒤에는 새 피드백과 활성화를 요구한다. 바퀴 RPM 포화를 구동 계층의 수치 범위 안에서 처리한다. | [직렬 전송 시험](../src/omslam_base/test/test_serial_worker.py) · [시뮬레이션 구동 시험](../src/omslam_sim/test/test_sim_guard.py) |
 | 5–7 | 정지 요청 뒤 시각이 다른 오도메트리 표본으로 연속 정지를 확인한다. 횡이동도 병진 속도에 포함하고 정지 처리 중에는 새 제어권을 보류한다. | [정지 표본 시험](../src/omslam_navigation/test/test_measured_stop.py) · [제어권 시험](../src/omslam_navigation/test/test_operator_guard.py) |
-| 8–13 | 원래 목표에 대한 위치·방향·속도를 함께 재검사한다. 실제 출발 자세부터 연결 구간을 검사하고 각 진입 경로의 비용과 대칭 heading을 처리한다. 목표 상태의 작은 시각 차이와 콘솔의 저속 운전을 지원한다. | [Lattice 경계 시험](../src/nav2_smac_planner/test/test_lattice_terminal.cpp) · [설치 DWB 주행·정체 시험](../src/omslam_navigation/test/test_installed_operator_motion.py) |
+| 8–13 | 원래 목표에 대한 위치·방향·속도를 함께 재검사한다. 실제 출발 자세부터 연결 구간을 검사하고 각 진입 경로의 비용과 대칭 heading을 처리한다. 목표 상태의 작은 시각 차이와 콘솔의 저속 운전을 지원한다. | 당시 `src/nav2_smac_planner/test/test_lattice_terminal.cpp` · [설치 DWB 주행·정체 시험](../src/omslam_navigation/test/test_installed_operator_motion.py) |
 | 14–18 | 넓은 단차 윗면을 바닥과 구별한다. 관측이 끊기면 장애물 삭제 투표를 초기화하고, 보관소에서 가까운 장애물을 복원한다. 이전 시간대의 스냅샷과 유효기간이 지난 동적 TF를 비용지도의 새 관측으로 사용하지 않는다. | [바닥·단차 시험](../src/omm_perception/test/test_geometry.cpp) · [장애물 기억 시험](../src/omm_perception/test/test_memory.cpp) · [비용지도 투영 시험](../src/omm_costmap_layers/test/test_memory_layer_projection.cpp) |
 | 19–22 | 지도 작업과 구동 권한을 서버에서 조정한다. 모든 콘솔이 같은 지도 세션과 AMCL 초기화 상태를 사용한다. 저장은 검증된 파일을 준비한 뒤 YAML을 마지막에 게시하므로 중간 실패 후 같은 이름으로 재시도할 수 있다. | [지도 작업 시험](../src/omslam_operator_support/test/test_map_operations.py) · [실패·재시도 시험](../src/omslam_mapping/test/test_bundle_transaction.py) |
 | 23–28 | 거절된 RPM과 전송 전 취소된 목표를 폐기한다. 승인 대기 중 조이스틱 입력을 유지하고, 다른 창의 경로도 목표 상태와 함께 갱신한다. 경로 기록에는 수집한 플러그인 설정과 원본 DWB 명령을 포함한다. | [GUI 상태 시험](../src/omslam_operator/test/test_live_model.py) · [경로 수명 시험](../src/omslam_operator/test/test_path_lifecycle.py) · [기록기 시험](../src/omslam_operator_support/test/test_debug_lifecycle.py) |
@@ -89,19 +89,19 @@ RViz 종료기는 마지막 0속도 표본이 0.5초 이내라는 조건을 0.2�
 
 ### 9. P1 · 전역 경로가 실제 시작 자세에서 첫 경로점까지의 충돌을 놓친다
 
-일반 Lattice 탐색은 시작 방향을 이산화한다. 경로 변환은 기본 자세를 이전 점으로 놓고 중복을 지워, 지도 원점·방향 0으로 이산화된 첫 점마저 지울 수 있다. 최종 검사는 반환 경로의 첫 점에서 시작한다. 설치본에 시작 `(0, 0, 0.20 rad)`, 목표 `(0.8, 0, 0)`과 차체 모서리에 걸리는 한 셀을 주자 실제 시작 footprint는 충돌이었지만 첫 점 `(0.0727, 0, 0)`부터의 12점 경로가 유효로 반환됐다. [smac_planner_lattice.cpp:341 · 시작 이산화](../src/nav2_smac_planner/src/smac_planner_lattice.cpp#L341) · [smac_planner_lattice.cpp:471 · 첫 점 제거](../src/nav2_smac_planner/src/smac_planner_lattice.cpp#L471) · [path_validation.hpp:71 · 검사 시작점](../src/nav2_smac_planner/include/nav2_smac_planner/path_validation.hpp#L71)
+일반 Lattice 탐색은 시작 방향을 이산화한다. 경로 변환은 기본 자세를 이전 점으로 놓고 중복을 지워, 지도 원점·방향 0으로 이산화된 첫 점마저 지울 수 있다. 최종 검사는 반환 경로의 첫 점에서 시작한다. 설치본에 시작 `(0, 0, 0.20 rad)`, 목표 `(0.8, 0, 0)`과 차체 모서리에 걸리는 한 셀을 주자 실제 시작 footprint는 충돌이었지만 첫 점 `(0.0727, 0, 0)`부터의 12점 경로가 유효로 반환됐다. (`src/nav2_smac_planner/src/smac_planner_lattice.cpp:341` 시작 이산화 · `:471` 첫 점 제거 · `src/nav2_smac_planner/include/nav2_smac_planner/path_validation.hpp:71` 검사 시작점)
 
 **수정 및 완료 기준** — 원래 연속 위치·yaw의 차체와 첫 경로점까지의 병진·회전 구간을 검사한다. 중복 비교는 실제 이전 점이 생긴 다음부터 수행한다. 평활화 on/off 모두 해당 입력은 실패해야 하고 장애물을 치우면 실제 시작 자세부터 유효한 경로가 나와야 한다.
 
 ### 10. P2 · 같은 격자점으로 들어오는 서로 다른 경로가 충돌 판정을 공유한다
 
-노드에 저장한 유효성·비용에는 그 점까지 들어온 이동 경로의 중간 충돌 결과가 포함된다. 다른 방향에서 같은 노드를 재방문하면 다른 경로를 검사하지 않고 이 값을 쓴다. 설치된 Lattice에서 두 이동 primitive를 독립 검사하면 각각 통과·충돌이다. 같은 노드를 재사용하면 먼저 검사한 순서에 따라 **둘 다 통과**하거나 **둘 다 실패**했다. 최종 경로 검사가 충돌 경로를 거절해도 탐색에서 버린 대안은 회복되지 않는다. [node_lattice.cpp:230 · 캐시 재사용](../src/nav2_smac_planner/src/node_lattice.cpp#L230) · [node_lattice.cpp:250 · 중간 자세 검사](../src/nav2_smac_planner/src/node_lattice.cpp#L250) · [node_lattice.cpp:554 · 이웃 확장](../src/nav2_smac_planner/src/node_lattice.cpp#L554)
+노드에 저장한 유효성·비용에는 그 점까지 들어온 이동 경로의 중간 충돌 결과가 포함된다. 다른 방향에서 같은 노드를 재방문하면 다른 경로를 검사하지 않고 이 값을 쓴다. 설치된 Lattice에서 두 이동 primitive를 독립 검사하면 각각 통과·충돌이다. 같은 노드를 재사용하면 먼저 검사한 순서에 따라 **둘 다 통과**하거나 **둘 다 실패**했다. 최종 경로 검사가 충돌 경로를 거절해도 탐색에서 버린 대안은 회복되지 않는다. (`src/nav2_smac_planner/src/node_lattice.cpp:230` 캐시 재사용 · `:250` 중간 자세 검사 · `:554` 이웃 확장)
 
 **수정 및 완료 기준** — 노드에는 끝점 자체의 결과만 저장하고, 들어오는 구간의 비용과 충돌은 시작점·방향·이동 primitive별로 검사한다. 두 방문 순서에서 같은 통과·충돌 결과와 유효한 대안 경로를 얻어야 한다.
 
 ### 11. P2 · 좌우 대칭인 상황에서 Lattice 거리 추정값이 크게 달라진다
 
-음의 Y를 반사할 때 방향 인덱스 0을 방향 개수 `N`으로 바꿔 다음 행의 거리 값을 읽는다. 설치된 Lattice에서 같은 방향, 상대 격자 좌표 `(-10, +2)`와 `(-10, -2)`의 추정값이 **10.24셀과 73.27셀**이었다. 대칭인 공간에서 탐색 우선순위가 방향에 따라 달라진다. 함께 포함된 Hybrid 구현에도 같은 식이 있다. [node_lattice.cpp:419 · 활성 Lattice](../src/nav2_smac_planner/src/node_lattice.cpp#L419) · [node_hybrid.cpp:758 · Hybrid](../src/nav2_smac_planner/src/node_hybrid.cpp#L758)
+음의 Y를 반사할 때 방향 인덱스 0을 방향 개수 `N`으로 바꿔 다음 행의 거리 값을 읽는다. 설치된 Lattice에서 같은 방향, 상대 격자 좌표 `(-10, +2)`와 `(-10, -2)`의 추정값이 **10.24셀과 73.27셀**이었다. 대칭인 공간에서 탐색 우선순위가 방향에 따라 달라진다. 함께 포함된 Hybrid 구현에도 같은 식이 있다. (`src/nav2_smac_planner/src/node_lattice.cpp:419` 활성 Lattice · `src/nav2_smac_planner/src/node_hybrid.cpp:758` Hybrid)
 
 **수정 및 완료 기준** — 반사 인덱스를 항상 `0..N-1`로 정규화한다. 방향 0을 포함해 모든 방향에서 좌우 반사쌍의 거리가 일치해야 한다.
 

@@ -23,20 +23,18 @@
 
 | 패키지 | 기준 버전 |
 | --- | --- |
-| `ros_gz_bridge` | 1.0.24 |
-| `nav2_smac_planner` (workspace 패치본) | 1.3.13 |
-| `nav2_bringup`, `nav2_controller`, `dwb_core`, `dwb_plugins`, `dwb_critics`, `nav2_velocity_smoother`, `nav2_collision_monitor` (Jazzy 설치본) | 1.3.14 |
+| `ros_gz_bridge` | 1.0.25 |
+| `nav2_bringup`, `nav2_smac_planner`, `nav2_controller`, `dwb_core`, `dwb_plugins`, `dwb_critics`, `nav2_velocity_smoother` (Jazzy 설치본) | 1.3.14 |
 | `slam_toolbox` | 2.8.5 |
-| `robot_localization` | 3.8.3 |
+| `robot_localization` | 3.8.4 |
 | `diff_drive_controller` | 4.42.1 |
 
-`nav2_smac_planner`는 Navigation2 1.3.13 커밋 `f4108e5b1c2bce804a1aa0c7be6673a8eb4a1501`에 패치를 적용해 workspace에서 빌드합니다. `ros2 pkg prefix nav2_smac_planner`는 이 workspace의 `install/nav2_smac_planner`를 가리켜야 합니다. [원본 커밋·파일 해시·패치 목록](../src/nav2_smac_planner/provenance.json)
+전역 계획기(`nav2_smac_planner`)와 속도 평활기(`nav2_velocity_smoother`)는 모두 공식 ROS 2 Jazzy 설치본(`/opt/ros/jazzy`, 1.3.14)을 사용합니다.
 
-- Lattice는 실제 출발 위치·방향에서 첫 격자 자세까지, 각 진입 움직임과 목표를 향한 해석적 연결에서 차체 전체가 지나가는 영역을 검사합니다. 같은 격자점에 들어와도 진입 경로별 비용과 충돌을 다시 계산합니다. Lattice와 Hybrid는 좌우 대칭 거리 추정의 반사 방향 인덱스를 유효 범위로 정규화합니다.
-- 경계 곡선·평활화·격자 좌표 변환은 비유한 좌표와 지도 상한을 포함한 범위 밖 인덱스를 거부합니다. 최종 경로는 연속 yaw의 채워진 footprint로 자세 사이까지 다시 검사합니다. 평활화 경로가 충돌하면 검사에 통과한 원래 경로를 사용하고, 둘 다 충돌하면 계획 실패를 반환합니다.
-- 시뮬레이션의 diff Lattice와 제어기는 원래 목표의 XY 허용 범위 0.10 m를 공유합니다. 이 범위에서는 제자리 회전과 원래 목표로 이어지는 짧은 연결을 충돌 검사합니다. 제어기는 도착을 판정하는 매 주기마다 위치·방향·측정 정지를 함께 확인합니다.
-
-Jazzy의 `velocity_smoother`와 `collision_monitor`는 설치된 Nav2 1.3 계열 패키지를 사용합니다. 명령 체인 검증은 두 바이너리를 직접 실행해 정확한 패치 버전과 실행 파일 해시, 원본 명령 만료 및 장애물 반응을 기록합니다.
+- 전역 계획은 `nav2_smac_planner::SmacPlannerLattice`와 `omslam_navigation`에 설치된 `diff` 움직임 집합(`5 cm`, 16방향, 회전 반경 `0.5 m`)을 사용합니다.
+- 지역 제어기는 `dwb_core::DWBLocalPlanner`와 `omslam_navigation`의 커스텀 trajectory generator·footprint/turn/oscillation critic 및 `SpeedAwareProgressChecker`를 사용합니다.
+- 도착 판정은 `StoppedGoalChecker`(`stateful=false`, XY `0.05 m`, yaw `0.15 rad`, 정지 속도 `0.01 m/s`·`0.02 rad/s`)가 매 주기 위치·방향·측정 정지를 함께 확인합니다.
+- 속도 명령은 `/cmd_vel/nav` → `navigation_guard` → `/cmd_vel/requested` → `velocity_smoother` → `/cmd_vel/smoothed` → `navigation_guard` → `/cmd_vel` → base 체인으로 전달되며, 원본 timestamp 보존과 300 ms 명령 수명 검사를 유지합니다.
 
 문서의 최신 Jazzy branch와 설치된 바이너리가 완전히 같다고 가정하지 않습니다. 특히 stamped velocity 옵션·smoother timestamp 보존 설정은 P1에서 설치본의 선언 파라미터와 실제 메시지로 확인합니다.
 
@@ -50,7 +48,7 @@ Jazzy의 `velocity_smoother`와 `collision_monitor`는 설치된 Nav2 1.3 계열
 | 호스트 송신 / 상태 수신 | 최대 50 Hz / 약 20 Hz |
 | command lease | 100–300 ms, 원본 생성 시각의 유효기간 보존 |
 | 피드백 중단 | 호스트 400 ms 기준 |
-| 바퀴 상한 | 실물 운용 95 RPM / MCU 보호 100 RPM / 시뮬레이션 42 RPM |
+| 바퀴 상한 | 실물 운용 3–95 RPM / MCU 보호 100 RPM / 시뮬레이션 3–70 RPM |
 | 정상 0 속도 | 제동/HOLD |
 | `STOP` | 제어·출력 해제 |
 
@@ -77,7 +75,7 @@ Jazzy의 `velocity_smoother`와 `collision_monitor`는 설치된 Nav2 1.3 계열
 | --- | --- |
 | Mega 펌웨어·공통 통신/보정 | 버전 고정 재사용. ROS 명령 시각을 전달하는 원본 시각을 받는 호환 호스트 API 확장을 vendor에 반영 |
 | 원본 description·mesh | provenance·라이선스 유지, 필요한 경로만 설치 |
-| Gazebo 모델·센서·월드 | 공통 ROS 계약과 시뮬레이션 42 RPM 한도 적용 |
+| Gazebo 모델·센서·월드 | 공통 ROS 계약과 시뮬레이션 3–70 RPM 범위 적용 |
 | `omm_perception`, `omm_perception_msgs` | 기존 바닥 분리·낮은 장애물 기억 기능 이관 |
 | `omm_costmap_layers` | camera memory 레이어 이관. 보로노이 전용 레이어는 초기 구성에서 제외 |
 | State Lattice | 새 기본 전역 계획기. 차동구동 움직임 집합·footprint·costmap 해상도를 새 공통 계약에 맞춰 고정 |
@@ -105,9 +103,7 @@ Jazzy의 `velocity_smoother`와 `collision_monitor`는 설치된 Nav2 1.3 계열
 
 1. [Nav2 Jazzy: Gazebo 구성 순서](https://docs.nav2.org/jazzy/configuration_and_development/first_time_robot_setup_guide/gazebo/) — TF·모델·odom·센서·mapping·navigation의 연결 순서.
 2. [Nav2 Jazzy: robot_localization](https://docs.nav2.org/jazzy/configuration_and_development/first_time_robot_setup_guide/odom/setup_robot_localization/) — wheel/IMU 결합과 odom TF의 단일 발행.
-3. [Nav2 Jazzy: Collision Monitor](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/collision_monitor/configuring_collision_monitor_node/) — stamped 명령, 입력/출력 토픽, 센서 timeout.
-4. [Nav2 Jazzy: Collision Monitor 연결](https://docs.nav2.org/jazzy/tutorials/general_tutorials/using_collision_monitor/using_collision_monitor/) — 속도 처리 체인의 마지막 단계에 배치.
-5. [Nav2 Jazzy smoother 소스](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_velocity_smoother/src/velocity_smoother.cpp) 및 [collision monitor 소스](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_collision_monitor/src/collision_monitor_node.cpp) — stamp 보존과 timeout 뒤 메시지의 의미 확인.
-6. [SLAM Toolbox Jazzy README](https://github.com/SteveMacenski/slam_toolbox/blob/jazzy/README.md) — scan/odom 입력, map 저장과 pose graph 직렬화의 차이.
-7. [REP 103](https://github.com/ros-infrastructure/rep/blob/master/rep-0103.rst), [REP 105](https://github.com/ros-infrastructure/rep/blob/master/rep-0105.rst) — 좌표축·SI 단위와 map/odom/base 프레임 책임.
-8. [ros2_control Jazzy diff_drive_controller](https://control.ros.org/jazzy/doc/ros2_controllers/diff_drive_controller/doc/userdoc.html) — 대안 검토 근거. 현재 계획에서 이 controller를 사용한다는 뜻은 아님.
+3. [Nav2 Jazzy smoother 소스](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_velocity_smoother/src/velocity_smoother.cpp) — stamp 보존과 timeout 뒤 메시지의 의미 확인.
+4. [SLAM Toolbox Jazzy README](https://github.com/SteveMacenski/slam_toolbox/blob/jazzy/README.md) — scan/odom 입력, map 저장과 pose graph 직렬화의 차이.
+5. [REP 103](https://github.com/ros-infrastructure/rep/blob/master/rep-0103.rst), [REP 105](https://github.com/ros-infrastructure/rep/blob/master/rep-0105.rst) — 좌표축·SI 단위와 map/odom/base 프레임 책임.
+6. [ros2_control Jazzy diff_drive_controller](https://control.ros.org/jazzy/doc/ros2_controllers/diff_drive_controller/doc/userdoc.html) — 대안 검토 근거. 현재 계획에서 이 controller를 사용한다는 뜻은 아님.

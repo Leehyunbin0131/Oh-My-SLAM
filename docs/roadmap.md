@@ -40,7 +40,7 @@ flowchart LR
 
 **선행:** P0, `Oh-My-Control` 고정 기준.
 
-**제공 상태:** base/vendor 패키지와 명령·엔코더 측정 경로를 구현하고 모의 장치에서 검증했습니다. 실행·입력 계약은 [구동·EKF 안내](base_ekf.md)를 따릅니다. Velocity Smoother·Collision Monitor를 포함한 Nav2 속도 체인 통합은 P4 범위입니다.
+**제공 상태:** base/vendor 패키지와 명령·엔코더 측정 경로를 구현하고 모의 장치에서 검증했습니다. 실행·입력 계약은 [구동·EKF 안내](base_ekf.md)를 따릅니다. Velocity Smoother·navigation_guard를 포함한 Nav2 속도 체인 통합은 P4 범위입니다.
 
 **구현 순서**
 
@@ -110,7 +110,7 @@ flowchart LR
 **구현 순서**
 
 1. `diff`, 0.05 m 격자, 16개 방향, 0.5 m 곡선 반경의 초기 움직임 집합을 출처·해시와 함께 `omslam_navigation`에 설치합니다. 전역 costmap 해상도 일치와 `lattice_filepath`의 설치 경로를 확인합니다.
-2. 공통 State Lattice + DWB, 표준 static·obstacle·inflation 레이어, footprint, 목표/진행 판정, smoothing, Collision Monitor를 연결합니다. 전역 계획기는 `nav2_smac_planner::SmacPlannerLattice`, 지역 제어기는 `dwb_core::DWBLocalPlanner`로 통일합니다. `vy=0`, 초기 후진 비활성, 사각형 차체의 `ObstacleFootprint` 충돌 검사를 적용하고 속도·가감속·샘플 수·critic 가중치를 장비 profile에서 관리합니다.
+2. 공통 State Lattice + DWB, 표준 static·obstacle·inflation 레이어, footprint, 목표/진행 판정, smoothing, navigation_guard를 연결합니다. 전역 계획기는 `nav2_smac_planner::SmacPlannerLattice`, 지역 제어기는 `dwb_core::DWBLocalPlanner`로 통일합니다. `vy=0`, 초기 후진 비활성, 사각형 차체의 `ObstacleFootprint` 충돌 검사를 적용하고 속도·가감속·샘플 수·critic 가중치를 장비 profile에서 관리합니다.
 3. 기본 구성에서 목표 도착·취소·재출발·코너·제자리 회전·막힌 경로의 대기/실패 반환을 확인합니다. 무한 recovery를 기본으로 두지 않습니다.
 4. 기존 `omm_perception`·메시지·camera memory costmap을 이관합니다. 낮은 장애물 감지, 시야 밖 보존, 재관측 빈 공간 삭제, 데이터 중단 차단을 확인합니다.
 5. 온라인 SLAM을 켠 상태의 Nav2도 별도 모드로 구성하고, 지도 갱신·loop closure와 장애물 기억의 좌표 변환을 확인합니다.

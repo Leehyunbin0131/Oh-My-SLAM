@@ -2,6 +2,8 @@
 
 [README](../README.md) · [통합 설계](architecture.md) · [기술 기준](baseline.md) · [자율주행](sim_navigation.md)
 
+> **참고 (역사적 기록)**: 이 문서는 워크스페이스 패치판 `nav2_smac_planner` 및 42 RPM 프로파일 시점의 코드 리뷰·검증 기록입니다. 이후 공식 ROS 2 Jazzy `nav2_smac_planner`·`navigation_guard` 단독 체인 및 시뮬레이션 3–70 RPM 범위로 단순화되었습니다. 현재 운용 기준은 [통합 설계](architecture.md)와 [시뮬레이션 자율주행](sim_navigation.md)을 따릅니다.
+
 통합 리뷰의 조사 16건과 외부 리뷰 33건에 대해 수정 내역, 설치본 검증 결과, 실물 측정 대상을 번호별로 정리했습니다. Gazebo에서 검증한 주행 상한은 42 RPM입니다. 최고 속도에서 목표를 네 번 취소했을 때 차체 정지를 0.30초 유지하기까지 0.948~0.956초, 이동거리는 0.092~0.095 m였습니다. [항목별 최종 결과](code_review_fix_results.md) · [통합 수정 계획과 인수 기준](code_review_fix_plan.md)
 
 앞선 리뷰에서는 최종 경로 검증, 시계 초기화, 명령 전달 순서, 프로세스 교체, MCU 시각 동기화를 수정했습니다. 당시의 세부 결과는 아래에 보존합니다. [11월 18일 운용 코드 리뷰](code_review_2026-11-18.md)
@@ -10,14 +12,14 @@
 
 | 문제 | 적용한 동작 | 구현·회귀 검사 |
 | --- | --- | --- |
-| 평활화 후 차체 충돌 검사 누락 | 최종 Lattice 경로를 연속 yaw의 채워진 footprint로 검사합니다. 자세 사이도 병진 거리와 외접 반경×회전각의 합이 샘플당 반 셀 이하가 되도록 보간합니다. 실패하면 원본 경로를 검사해 복원하고, 원본도 불안전하면 계획 실패를 반환합니다. 같은 셀의 시작·목표 조기 반환에도 적용합니다. | [path_validation.hpp](../src/nav2_smac_planner/include/nav2_smac_planner/path_validation.hpp), [계획기](../src/nav2_smac_planner/src/smac_planner_lattice.cpp), [회귀 검사](../src/nav2_smac_planner/test/test_path_validation.cpp) |
-| 맵 경계 접근 | 좌표 유효 범위를 `0 ≤ value < size`로 제한하고 비유한 좌표와 범위 밖 선형 인덱스도 거부합니다. 평활화 반복의 `worldToMap()` 실패를 확인한 뒤 셀에 접근합니다. | [collision_checker.cpp](../src/nav2_smac_planner/src/collision_checker.cpp), [smoother.cpp](../src/nav2_smac_planner/src/smoother.cpp), [경계 검사](../src/nav2_smac_planner/test/test_smoother_bounds.cpp) |
+| 평활화 후 차체 충돌 검사 누락 | 최종 Lattice 경로를 연속 yaw의 채워진 footprint로 검사합니다. 자세 사이도 병진 거리와 외접 반경×회전각의 합이 샘플당 반 셀 이하가 되도록 보간합니다. 실패하면 원본 경로를 검사해 복원하고, 원본도 불안전하면 계획 실패를 반환합니다. 같은 셀의 시작·목표 조기 반환에도 적용합니다. | 당시 워크스페이스 패치본 `src/nav2_smac_planner/include/nav2_smac_planner/path_validation.hpp`, `src/nav2_smac_planner/src/smac_planner_lattice.cpp`, `src/nav2_smac_planner/test/test_path_validation.cpp` |
+| 맵 경계 접근 | 좌표 유효 범위를 `0 ≤ value < size`로 제한하고 비유한 좌표와 범위 밖 선형 인덱스도 거부합니다. 평활화 반복의 `worldToMap()` 실패를 확인한 뒤 셀에 접근합니다. | 당시 워크스페이스 패치본 `src/nav2_smac_planner/src/collision_checker.cpp`, `src/nav2_smac_planner/src/smoother.cpp`, `src/nav2_smac_planner/test/test_smoother_bounds.cpp` |
 | SLAM↔AMCL 교체와 프로세스 감시 경쟁 | 종료 대상은 신호 전송 전에 소유 목록에서 제거하고, 감시 대상 선택과 `poll()`을 동일한 잠금 안에서 처리합니다. 교체 전 프로세스의 정상 종료를 장애로 보고하지 않으며 실제 새 프로세스 종료는 감지합니다. | [session.py](../src/omslam_operator_support/omslam_operator_support/session.py), [교체 검사](../src/omslam_operator_support/test/test_map_operations.py) |
 | 시간 역행 후 정지 관측·TF 잔류 | `stop_samples`, `stopped_since`와 동적 TF 기록을 폐기합니다. GUI Buffer는 노드 시계를 사용하고 가드·GUI 모두 1초 미만 역행도 명시적으로 초기화합니다. 초기화 후 새 관측·제어권·활성화가 필요합니다. | [operator_core.py](../src/omslam_navigation/omslam_navigation/operator_core.py), [navigation_guard.py](../src/omslam_navigation/omslam_navigation/navigation_guard.py), [worker.py](../src/omslam_operator/omslam_operator/worker.py), [복구 검사](../src/omslam_navigation/test/test_review_recovery.py), [GUI 검사](../src/omslam_operator/test/test_cloud_display.py) |
 | 출발 대기용 zero가 새 이동 명령 폐기 | 유효한 새 이동 명령이 downstream 응답을 기다리는 동안 주기적 대기 zero를 생략합니다. 실제 정지·만료·차단은 그대로 적용하며 동일 명령을 다시 보내도 정지를 취소할 수 없습니다. ROS/steady 매핑 지터로 `issued_at`이 역행하는 입력은 lease를 연장하지 않고 거부합니다. | [guard_core.py](../src/omslam_navigation/omslam_navigation/guard_core.py), [base core](../src/omslam_base/omslam_base/core.py), [연결 검사](../src/omslam_navigation/test/test_review_recovery.py) |
 | MCU 시계 드리프트 누적 | 적분 `dt`는 MCU tick 차이를 유지합니다. 메시지 시각만 2초 EMA와 `dt`의 1% slew 한도로 호스트에 맞춥니다. 보정 전 400 ms 초과 오프셋 점프, 호스트 시각 역행, MCU 리셋·피드백 단절은 계속 거부합니다. | [base core](../src/omslam_base/omslam_base/core.py), [모의 드리프트 검사](../src/omslam_base/test/test_core.py) |
 
-경로 검사는 현재 5 cm 격자에서 샘플 이동량 최대 2.5 cm의 보간 검사이며 연속 공간의 무충돌 증명을 뜻하지 않습니다. 하위 DWB·Collision Monitor의 검사는 계속 필요합니다. 상류 Nav2 코드 변경은 [provenance](../src/nav2_smac_planner/provenance.json)와 패치로 추적합니다.
+경로 검사는 현재 5 cm 격자에서 샘플 이동량 최대 2.5 cm의 보간 검사이며 연속 공간의 무충돌 증명을 뜻하지 않습니다. 하위 DWB의 검사는 계속 필요합니다. 당시 상류 Nav2 코드 변경은 `src/nav2_smac_planner/provenance.json`과 패치로 추적했습니다.
 
 ## 성능·운용 수정
 

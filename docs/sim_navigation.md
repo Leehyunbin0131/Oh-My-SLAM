@@ -2,7 +2,7 @@
 
 [README](../README.md) · [지도 작성·위치추정](sim_mapping.md) · [인수 기준](acceptance.md) · [P4 구현·검증 명세](p4_implementation_plan.md)
 
-`omslam_navigation`은 온라인 SLAM 또는 저장 지도에서 State Lattice 경로를 DWB로 추종합니다. 라이다와 RGB-D 장애물 기억을 비용지도에 반영하고, Collision Monitor와 navigation guard가 관측·명령·실행 상태에 따라 구동을 차단합니다. 이 실행 경로의 대상은 Gazebo 시뮬레이션입니다.
+`omslam_navigation`은 온라인 SLAM 또는 저장 지도에서 State Lattice 경로를 DWB로 추종합니다. 라이다와 RGB-D 장애물 기억을 비용지도에 반영하고, `navigation_guard`가 관측·명령·실행 상태에 따라 구동을 차단합니다. 이 실행 경로의 대상은 Gazebo 시뮬레이션입니다.
 
 Gazebo 주행 범위는 바퀴별 **3–70 RPM**(상한 직진 약 **0.4985 m/s**, 회전 **0.50 rad/s**, 최소 구동 하한 **3.0 RPM** peak-wheel 데드밴드 컷)입니다. GUI는 **35 RPM**으로 시작하며 **3–70 RPM** 범위에서 막대(0.1 RPM 간격)나 숫자 입력으로 조정할 수 있습니다. 과거 42 RPM 상한 프로파일의 직진 중 Nav2 목표를 네 번 취소한 시험에서는 차체가 정지 상태를 0.30초 유지하기까지 0.948~0.956초가 걸렸고, 취소 뒤 이동거리는 9.2~9.5 cm였습니다. [측정 조건과 결과](code_review_fix_results.md)
 
@@ -30,7 +30,7 @@ cd ~/MyRos/Oh_My_SLAM
 | 도착 판정 | `StoppedGoalChecker`, 위치 0.05 m·yaw 0.15 rad 이내와 측정 속도 0.01 m/s·0.02 rad/s 이하를 함께 확인 |
 | 비용지도 | 전역 static→lidar→camera memory→inflation, 지역 lidar→camera memory→inflation |
 | 인지 | depth·CameraInfo·유효 IMU 자세로 바닥 분리, `odom` 기준 장애물 기억 |
-| 명령 | `/cmd_vel/nav`→guard→`/cmd_vel/requested`→smoother→`/cmd_vel/smoothed`→monitor→`/cmd_vel/monitored`→guard→`/cmd_vel`→sim base |
+| 명령 | `/cmd_vel/nav`→guard→`/cmd_vel/requested`→smoother→`/cmd_vel/smoothed`→guard→`/cmd_vel`→sim base |
 | 위치추정 | EKF의 `odom → base_footprint`, SLAM 또는 AMCL 하나의 `map → odom` |
 | 구동 권한 | `/navigation/enable` 서비스, 최신 관측·서버 준비·base 활성화 후 새 목표 필요 |
 
@@ -44,7 +44,7 @@ BT는 목표에서 `bt_navigator.goal_reached_tol`(1.5 m)보다 멀면 1 Hz로 �
 
 콘솔에서 3 RPM처럼 낮은 속도를 지정하면 DWB가 실제로 구동 가능한 이동 후보와 도착 제동 후보를 함께 생성·평가하고 예측 시간을 늘립니다. 진행 감시기도 승인된 속도로 5초간 갈 수 있는 거리·회전량을 반영하며, 10초간 진행이 없으면 실패로 판정합니다.
 
-전역 계획기는 공식 Nav2 1.3.13 패키지에 연속 좌표 충돌 검사 패치를 적용한 workspace 설치본을 사용합니다. 격자 경계를 넘을 때 footprint 검사 위치가 셀 중심으로 이동하지 않도록 하며, 실제 장애물·unknown 거부 기준은 유지합니다. 원본 커밋·파일 해시·패치는 [기술 기준](baseline.md#개발-pc-설치-버전)과 패키지의 `provenance.json`에 기록합니다.
+전역 계획기는 공식 ROS 2 Jazzy 설치본 `nav2_smac_planner` (`1.3.14`, `/opt/ros/jazzy`)을 사용합니다. 설치 기준은 [기술 기준](baseline.md#개발-pc-설치-버전)에, 움직임 집합 원본·해시는 `omslam_navigation/config/lattice/provenance.json`에 기록합니다.
 
 TF 발행 책임은 고정된 launch 구성과 실제 endpoint 목록을 함께 확인합니다. `/tf`는 `ekf_filter_node`, `robot_state_publisher`, 선택한 `slam_toolbox` 또는 `amcl` 노드가 각각 하나씩 있어야 하며, `/tf_static`은 `robot_state_publisher`만 허용합니다. 한 노드가 여러 broadcaster endpoint를 소유하는 경우와 같은 이름의 노드가 중복 실행된 경우를 구분합니다. 중복 노드·추가 발행 노드가 있으면 구동 준비를 차단합니다. Jazzy의 Python 수신 정보에는 메시지별 sender GID가 없으므로 이를 개별 TF edge의 발행자 추적으로 표시하지 않습니다. edge의 실제 수신 공백·관측 시각 변환·map 보정은 별도로 감시합니다.
 
@@ -66,10 +66,11 @@ source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 export ROS_DOMAIN_ID=86
 export GZ_PARTITION=omslam-navigation
+ros2 pkg prefix omslam_navigation
 ros2 pkg prefix nav2_smac_planner
 ```
 
-마지막 명령의 경로는 현재 workspace의 `install/nav2_smac_planner`여야 합니다. `/opt/ros/jazzy`가 출력되면 새 설치본 환경이 적용되지 않은 상태입니다.
+`omslam_navigation`은 현재 workspace의 `install/omslam_navigation`을, `nav2_smac_planner`는 공식 Jazzy 설치본 `/opt/ros/jazzy`를 가리켜야 합니다.
 
 ## 온라인 SLAM으로 시작
 
@@ -149,7 +150,7 @@ ros2 service call /navigation/enable std_srvs/srv/SetBool '{data: false}'
 | scan·depth·인지 health가 0.30 s 이상 오래됨 | zero·목표 취소·base 비활성화, 데이터 복구만으로 재출발하지 않음 |
 | EKF odom·wheel·TF·lifecycle 이상 | 동일한 fault latch, `missing`과 관련 센서/서버 상태 확인 |
 | 원본 이동 명령 만료 | 300 ms 수명 이후 구동 차단, 반복된 평활 출력으로 수명 연장 불가 |
-| 장애물에 의한 monitor stop | zero 우선; 새 유효 원본·관측 조건에서 같은 목표의 제어 가능 |
+| 명시적 정지·목표 취소 | zero 우선; 새 유효 원본·관측 조건에서 새 목표 제어 가능 |
 | 제한된 BT 대기 | 정지→2초 대기→재계획 1회, 계속 불가능하면 action 실패 |
 | 큰 map 보정 | 연속 표본 간 0.10 m 또는 0.10 rad 이상이면 latch, 같은 세션에서 재활성화 불가 |
 | 시뮬레이션 pause·시각 역행 | 과거 명령 폐기, 새 관측·활성화·새 목표 요구 |

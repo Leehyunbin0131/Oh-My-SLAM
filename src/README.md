@@ -10,8 +10,7 @@
 | `omslam_sim` | 공항 월드·보행자, 로봇 하단 어댑터·가상 센서·EKF 연결 | 환경 선행 구현 · P2 |
 | `omslam_localization` | wheel-only/EKF 설정, IMU 입력과 TF 발행 선택 | P2–P3 |
 | `omslam_mapping` | SLAM·map/graph 저장·map_server/AMCL | P3 |
-| `omslam_navigation` | State Lattice+DWB 설정·움직임 집합·속도 체인·BT·제어 권한 가드·실행 모드 | P4 |
-| `nav2_smac_planner` | 공식 1.3.13 패키지, 연속 충돌 좌표 보존·smoother 경계 및 최종 경로 차체 검증 패치 | P4 |
+| `omslam_navigation` | 공식 Jazzy `nav2_smac_planner` 기반 State Lattice+DWB 설정·움직임 집합·속도 체인·BT·제어 권한 가드·실행 모드 | P4 |
 | `omm_perception`, `omm_perception_msgs`, `omm_costmap_layers` | 기존 인지·장애물 기억 cost 기능 이관 | P4 |
 | `omslam_navigation_contracts` | 실제 planner·DWB 플러그인의 차체 충돌 경계 검사 실행 파일 | P4 검증 |
 | `omslam_operator`, `omslam_operator_msgs`, `omslam_operator_support` | 지도 중심 통합 제어·모니터링 Qt 콘솔, 운영 제어 인터페이스 및 프로세스·지도 세션 관리 | P4 콘솔 |
