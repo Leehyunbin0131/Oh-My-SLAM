@@ -15,18 +15,18 @@
 
 ---
 
-**Oh-My-SLAM**은 [`Oh-My-MobileRobot`](https://github.com/Leehyunbin0131/Oh-My-MobileRobot)의 기구·URDF 모델과 [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control)의 **Arduino Mega 1 kHz 모터 제어·센서 보정 계층**을 상위 **ROS 2 자율주행 스택**(`slam_toolbox`, `AMCL`, `Nav2`)으로 통합하는 워크스페이스입니다.
+**Oh-My-SLAM**은 [`Oh-My-MobileRobot`](https://github.com/Leehyunbin0131/Oh-My-MobileRobot)의 기구·URDF 모델과 [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control)의 **Arduino Mega 1 kHz 모터 제어·센서 보정 계층**을 상위 **ROS 2 자율주행 스택** `slam_toolbox`·`AMCL`·`Nav2`로 통합하는 워크스페이스입니다.
 
-시뮬레이션(**Gazebo Harmonic**)과 실제 로봇(**Jetson Orin Nano Super + Arduino Mega 2560**)이 **동일한 ROS 2 토픽·TF·명령 수명 계약**을 공유하도록 설계하여, 가상 환경에서 검증한 위치추정·지도 작성·경로 주행·장애물 인지 파이프라인을 실물 로봇에 그대로 적용합니다.
+**Gazebo Harmonic** 시뮬레이션과 **Jetson Orin Nano Super + Arduino Mega 2560** 실물 로봇이 **동일한 ROS 2 토픽·TF·명령 수명 계약**을 공유하도록 설계하여, 가상 환경에서 검증한 위치추정·지도 작성·경로 주행·장애물 인지 파이프라인을 실물 로봇에 그대로 적용합니다.
 
 > **현재 제공 기능**: **ROS 구동 브리지·엔코더 오도메트리·외장 IMU 입력·EKF**와 **2터미널 공항 환경·32명 보행자**를 제공합니다. 시뮬레이션에서 `slam_toolbox` 지도 작성·저장, AMCL 위치추정과 Nav2 목표 주행을 연결합니다. **Oh My Robot Console**은 지도 위에서 목적지 목록과 실제 ROS 센서·구동 계측을 함께 확인하고 목표 이동·직접 조종·지도 작업을 수행합니다. 단일·다중 목적지는 같은 이동 흐름을 사용하고 시스템 로그만 별도 화면으로 표시합니다. 실물 주행·Nav2는 단계별 구현 대상입니다. [콘솔 실행](docs/operator_gui.md) · [구동·EKF 실행](docs/base_ekf.md) · [로봇 시뮬레이션](docs/sim_robot.md) · [지도 작성·위치추정](docs/sim_mapping.md) · [공항 환경](docs/airport_world.md)
 
 ### 핵심 특징
 
-- **시뮬레이션–실물 단일 인터페이스 (`Sim-to-Real`)**: 상위 제어·위치추정·Nav2 구성을 공통으로 유지하고, 최하단 구동·센서 어댑터(`Gazebo DiffDrive` ↔ `Arduino Mega OMR1 USB`)와 기하 보정값만 교체
-- **1 kHz 실시간 모터 제어 보존**: Arduino Mega의 20 kHz 엔코더 디코딩·1 kHz 속도 PID·정지 위치 유지(`HOLD`)·300 ms 워치독을 그대로 활용하고, ROS 2 브리지(`omslam_base`)가 원본 명령 시각 보존과 실측 오도메트리를 담당
-- **엔코더 + IMU 센서 융합 및 2D SLAM**: 바퀴 엔코더 측정 오도메트리와 검증된 IMU 각속도를 `robot_localization`(EKF)으로 결합(`odom → base_footprint`)하고, 주행 모드에 따라 `slam_toolbox`와 `AMCL`이 `map → odom`을 배타적으로 발행
-- **자율주행 및 낮은 장애물 3D 기억 (`Nav2`)**: 차체 방향과 기본 움직임 집합을 고려하는 전역 경로 계획(`Smac State Lattice`), 차체 외곽을 검사하는 지역 궤적 평가·장애물 회피(`DWB`), 라이다 스캔 평면 아래의 낮은 장애물을 감지·보존하는 RGB-D 비용지도 레이어 결합
+- **시뮬레이션–실물 단일 인터페이스**: 상위 제어·위치추정·Nav2 구성을 공통으로 유지하고, 최하단 `Gazebo DiffDrive` ↔ `Arduino Mega OMR1 USB` 구동·센서 어댑터와 기하 보정값만 교체
+- **1 kHz 실시간 모터 제어 보존**: Arduino Mega의 20 kHz 엔코더 디코딩·1 kHz 속도 PID·`HOLD` 정지 위치 유지·300 ms 워치독을 그대로 활용하고, `omslam_base` ROS 2 브리지가 원본 명령 시각 보존과 실측 오도메트리를 담당
+- **엔코더 + IMU 센서 융합 및 2D SLAM**: 바퀴 엔코더 측정 오도메트리와 검증된 IMU 각속도를 `robot_localization` EKF로 결합해 `odom → base_footprint`를 발행하고, 주행 모드에 따라 `slam_toolbox`와 `AMCL`이 `map → odom`을 배타적으로 발행
+- **Nav2 자율주행 및 낮은 장애물 3D 기억**: 차체 방향과 기본 움직임 집합을 고려하는 `Smac State Lattice` 전역 계획, 차체 외곽을 검사하는 `DWB` 지역 궤적 평가·장애물 회피, 라이다 스캔 평면 아래의 낮은 장애물을 감지·보존하는 RGB-D 비용지도 레이어 결합
 
 <a id="overview"></a>
 
@@ -98,10 +98,10 @@ flowchart LR
 
 ## 핵심 설계 원칙
 
-- **검증된 저수준 제어 코드 재사용**: `Oh-My-Control`의 시리얼 프로토콜(`OMR1`)·구동 보정·`WheelDrive` 모듈은 고정 커밋으로 재사용하며, Arduino Mega에 micro-ROS를 올리거나 호스트로 속도 PID를 옮기지 않습니다.
-- **원본 명령 시각 보존과 엄격한 워치독**: 속도 명령 체인은 `TwistStamped`로 통일하고, 중간 평활기(`Velocity Smoother`)를 거치더라도 **최초 명령이 생성된 시각 기준 300 ms 유효기간**을 넘기지 않도록 관리합니다.
+- **검증된 저수준 제어 코드 재사용**: `Oh-My-Control`의 `OMR1` 시리얼 프로토콜·구동 보정·`WheelDrive` 모듈은 고정 커밋으로 재사용하며, Arduino Mega에 micro-ROS를 올리거나 호스트로 속도 PID를 옮기지 않습니다.
+- **원본 명령 시각 보존과 엄격한 워치독**: 속도 명령 체인은 `TwistStamped`로 통일하고, `Velocity Smoother`를 거치더라도 **최초 명령이 생성된 시각 기준 300 ms 유효기간**을 넘기지 않도록 관리합니다.
 - **측정 기반 오도메트리와 단일 TF 소유권**: 목표 명령 적분이 아닌 **실제 엔코더 누적 변화량**과 검증된 IMU 각속도로 오도메트리를 생성하며, `odom → base_footprint`와 `map → odom` 변환은 각 모드에서 단 하나의 노드만 발행합니다.
-- **실용적 인지 범위 설정**: 시각 오도메트리(VO/VIO)는 사용하지 않으며, 라이다 높이 아래의 낮은 장애물은 RGB-D 깊이 기반 3D 점유 메모리로 보완합니다(AI 객체 분류·동적 객체 추적은 본 기본 자율주행 범위에서 제외).
+- **실용적 인지 범위 설정**: 시각 오도메트리는 사용하지 않으며, 라이다 높이 아래의 낮은 장애물은 RGB-D 깊이 기반 3D 점유 메모리로 보완합니다. AI 객체 분류와 동적 객체 추적은 본 기본 자율주행 범위에서 제외합니다.
 
 <a id="docs"></a>
 
