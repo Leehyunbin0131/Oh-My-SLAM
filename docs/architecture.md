@@ -23,24 +23,24 @@ Arduino Mega 2560 하위 구동 제어기와 상위 ROS 2 자율주행 스택(`r
 
 ```mermaid
 flowchart TD
-    T[수동 조종] --> S[명령 소스 선택·원본 시각 기록]
-    N[Nav2 controller / behavior] --> S
-    S --> V[Velocity Smoother]
-    V --> F[navigation_guard: 관측·명령 최종 차단]
-    F --> B[omslam_base: 수명·장치 상태 검사]
-    S -. 원본 명령 신선도 .-> B
-    B --> H[실물: WheelDrive → MotorClient → Mega]
-    B --> G[시뮬레이션: Gazebo DiffDrive]
-    H --> W[측정 wheel odometry / joint states]
+    T["수동 조종"] --> S["명령 소스 선택·원본 시각 기록"]
+    N["Nav2 controller / behavior"] --> S
+    S --> V["Velocity Smoother"]
+    V --> F["navigation_guard: 관측·명령 최종 차단"]
+    F --> B["omslam_base: 수명·장치 상태 검사"]
+    S -. "원본 명령 신선도" .-> B
+    B --> H["실물: WheelDrive → MotorClient → Mega"]
+    B --> G["시뮬레이션: Gazebo DiffDrive"]
+    H --> W["측정 wheel odometry / joint states"]
     G --> W
-    W --> E[EKF]
-    I[IMU 각속도] --> E
-    E --> O[odom / odom→base_footprint]
-    O --> L[slam_toolbox 또는 AMCL]
-    R[LaserScan] --> L
-    L --> M[map / map→odom]
+    W --> E["EKF"]
+    I["IMU 각속도"] --> E
+    E --> O["odom / odom→base_footprint"]
+    O --> L["slam_toolbox 또는 AMCL"]
+    R["LaserScan"] --> L
+    L --> M["map / map→odom"]
     M --> N
-    D[깊이·IMU: 바닥과 낮은 장애물] --> K[지역·전역 costmap / 관측 상태]
+    D["깊이·IMU: 바닥과 낮은 장애물"] --> K["지역·전역 costmap / 관측 상태"]
     K --> N
     R --> F
     D --> F

@@ -15,7 +15,7 @@
 
 ---
 
-**Oh-My-SLAM**은 [`Oh-My-MobileRobot`](https://github.com/Leehyunbin0131/Oh-My-MobileRobot)의 기구·URDF 모델과 [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control)의 **Arduino Mega 1 kHz 모터 제어·센서 보정 계층**을 상위 **ROS 2 자율주행 스택(`slam_toolbox`, `AMCL`, `Nav2`)**으로 통합하는 워크스페이스입니다.
+**Oh-My-SLAM**은 [`Oh-My-MobileRobot`](https://github.com/Leehyunbin0131/Oh-My-MobileRobot)의 기구·URDF 모델과 [`Oh-My-Control`](https://github.com/Leehyunbin0131/Oh-My-Control)의 **Arduino Mega 1 kHz 모터 제어·센서 보정 계층**을 상위 **ROS 2 자율주행 스택**(`slam_toolbox`, `AMCL`, `Nav2`)으로 통합하는 워크스페이스입니다.
 
 시뮬레이션(**Gazebo Harmonic**)과 실제 로봇(**Jetson Orin Nano Super + Arduino Mega 2560**)이 **동일한 ROS 2 토픽·TF·명령 수명 계약**을 공유하도록 설계하여, 가상 환경에서 검증한 위치추정·지도 작성·경로 주행·장애물 인지 파이프라인을 실물 로봇에 그대로 적용합니다.
 
@@ -49,19 +49,19 @@
 ```mermaid
 flowchart LR
     subgraph Upper["상위 주행 · 인지 (ROS 2 Jazzy)"]
-        Nav["수동 조종 / Nav2\n(State Lattice + DWB)"]
-        Safety["Velocity Smoother\n+ Navigation Guard"]
-        SLAM["slam_toolbox / AMCL\n+ RGB-D 낮은 장애물 기억"]
+        Nav["수동 조종 / Nav2<br/>(State Lattice + DWB)"]
+        Safety["Velocity Smoother<br/>+ Navigation Guard"]
+        SLAM["slam_toolbox / AMCL<br/>+ RGB-D 낮은 장애물 기억"]
     end
 
     subgraph Bridge["베이스 브리지 · 상태 추정"]
-        Base["omslam_base\n(차동구동 변환 · 원본 명령 수명 감시)"]
-        EKF["robot_localization (EKF)\n(/wheel/odometry + /imu/data)"]
+        Base["omslam_base<br/>(차동구동 변환 · 원본 명령 수명 감시)"]
+        EKF["robot_localization (EKF)<br/>(/wheel/odometry + /imu/data)"]
     end
 
     subgraph Hardware["하단 백엔드 (Sim / Real 교체)"]
-        Real["실물: Oh-My-Control WheelDrive\n↔ Arduino Mega (1 kHz PID)"]
-        Sim["시뮬레이션: Gazebo Harmonic\n(DiffDrive + 가상 센서)"]
+        Real["실물: Oh-My-Control WheelDrive<br/>↔ Arduino Mega (1 kHz PID)"]
+        Sim["시뮬레이션: Gazebo Harmonic<br/>(DiffDrive + 가상 센서)"]
     end
 
     Nav --> Safety --> Base
@@ -80,7 +80,7 @@ flowchart LR
 
 ## 단계별 구현 로드맵
 
-하위 구동 계층(`Oh-My-Control`)의 검증된 펌웨어·통신 코어를 기반으로, ROS 2 브리지와 시뮬레이션 검증(`P1`~`P4`)을 먼저 완료한 뒤 실물 로봇(`P5`~`P8`)으로 이행합니다.
+하위 구동 계층(`Oh-My-Control`)의 검증된 펌웨어·통신 코어를 기반으로, ROS 2 브리지와 시뮬레이션 검증(`P1`–`P4`)을 먼저 완료한 뒤 실물 로봇(`P5`–`P8`)으로 이행합니다.
 
 | 단계 | 목표 산출물 | 검증 환경 | 현재 상태 |
 | --- | --- | --- | --- |
@@ -110,8 +110,8 @@ flowchart LR
 | 문서 | 주요 내용 |
 | --- | --- |
 | [**통합 아키텍처 설계**](docs/architecture.md) | 호스트–Mega 연결 구조, 원본 명령 수명과 워치독 계약, 기구학·오도메트리, 토픽·서비스·액션·TF 계약 |
-| [**단계별 구현 계획**](docs/roadmap.md) | `P0`~`P8` 단계별 선행 조건, 구현 패키지 구성, 실행 모드 및 완료 기준 |
-| [**인수 검증 기준**](docs/acceptance.md) | 단계별 통합 시험(`V1`~`V8`) 묶음, 정량적 통과 기준, 실패 주입 범위 및 검증 기록 구조 |
+| [**단계별 구현 계획**](docs/roadmap.md) | `P0`–`P8` 단계별 선행 조건, 구현 패키지 구성, 실행 모드 및 완료 기준 |
+| [**인수 검증 기준**](docs/acceptance.md) | 단계별 통합 시험(`V1`–`V8`) 묶음, 정량적 통과 기준, 실패 주입 범위 및 검증 기록 구조 |
 | [**기술 기준과 호환성**](docs/baseline.md) | 기준 OS·ROS 2 패키지 버전, 하드웨어·모델 기하 규격, 기존 시뮬레이션·실물 자산의 이관 범위 |
 | [**구동 브리지·EKF 실행**](docs/base_ekf.md) | 엔코더·IMU 입력, lifecycle, 장착 TF, 빌드·실행과 모의 검증 |
 | [**로봇·센서 시뮬레이션**](docs/sim_robot.md) | CAD 모델, 가상 라이다·IMU·RGB-D, 공통 명령·wheel/EKF·TF 연결 |

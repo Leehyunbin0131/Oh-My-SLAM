@@ -8,16 +8,16 @@
 
 ```mermaid
 flowchart LR
-    C[TwistStamped 명령] --> B[ROS 구동 브리지]
-    B --> M[WheelDrive / Mega]
-    M -->|측정 엔코더| W[wheel/odometry]
-    H[HFI-A9 / IMU raw] --> I[편향 보정 / imu/data]
-    W --> E[2D EKF]
+    C["TwistStamped 명령"] --> B["ROS 구동 브리지"]
+    B --> M["WheelDrive / Mega"]
+    M -->|"측정 엔코더"| W["wheel/odometry"]
+    H["HFI-A9 / IMU raw"] --> I["편향 보정 / imu/data"]
+    W --> E["2D EKF"]
     I --> E
-    E --> O[odom / odom → base_footprint]
-    O --> S[SLAM 또는 AMCL: 별도 단계]
-    L[라이다 scan] --> S
-    S --> P[map → odom]
+    E --> O["odom / odom → base_footprint"]
+    O --> S["SLAM 또는 AMCL: 별도 단계"]
+    L["라이다 scan"] --> S
+    S --> P["map → odom"]
 ```
 
 | 데이터 | 의미 |
