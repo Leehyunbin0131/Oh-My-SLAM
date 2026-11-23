@@ -1,15 +1,16 @@
 """Steady watchdog around simulator time and the shared command lease."""
 import math
-from omslam_base.core import CLOCK_SKEW_S, CommandGate, Geometry
+from omslam_base.core import CLOCK_SKEW_S, MIN_WHEEL_RPM, CommandGate, Geometry
 
 
+SIM_MIN_WHEEL_RPM = MIN_WHEEL_RPM
 SIM_MAX_WHEEL_RPM = 70.
 SIM_MAX_LINEAR_VELOCITY = Geometry().left_radius * math.pi / 30 * SIM_MAX_WHEEL_RPM
 
 
 class SimCommandGuard:
     def __init__(self, geometry=None, clock_timeout=.3):
-        self.geometry = geometry or Geometry(max_rpm=SIM_MAX_WHEEL_RPM)
+        self.geometry = geometry or Geometry(max_rpm=SIM_MAX_WHEEL_RPM, min_rpm=SIM_MIN_WHEEL_RPM)
         self.gate = CommandGate()
         self.clock_timeout = clock_timeout
         self.sim_ns = None
@@ -61,6 +62,9 @@ class SimCommandGuard:
         return accepted
 
     def sample(self, now):
+        return self.geometry.twist(*self.sample_rpm(now))
+
+    def sample_rpm(self, now):
         if not self.clock_fresh(now):
             if not self.suspended:
                 self.gate.clear()
@@ -73,18 +77,17 @@ class SimCommandGuard:
         if target is None:
             self.reason = 'no live original intent'
             return 0., 0.
-        vx, wz, issued = target
+        vx, wz, _ = target
         # Reject simulation-time expiry too: a speed-up must not lengthen lease.
         if self.target_stamp is None or not -CLOCK_SKEW_S <= (self.sim_ns-self.target_stamp)*1e-9 < self.gate.TIMEOUT:
             self.gate.target = None
             return 0., 0.
         try:
+            # The applied output can be zero while the original lease stays live.
             left, right = self.geometry.rpm(vx, wz)
         except ValueError:
             self.gate.withdraw_target()
             self.reason = 'invalid wheel velocity; intent discarded'
             return 0., 0.
-        vl = left*math.pi/30*self.geometry.left_radius
-        vr = right*math.pi/30*self.geometry.right_radius
         self.reason = 'live intent'
-        return (vl+vr)/2, (vr-vl)/self.geometry.separation
+        return left, right

@@ -15,7 +15,7 @@ from std_msgs.msg import Int64MultiArray, Float64MultiArray, Bool
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rcl_interfaces.msg import SetParametersResult
 from omslam_operator_msgs.msg import MotorTelemetry
-from .core import Geometry, EncoderOdometry, CommandGate
+from .core import MIN_WHEEL_RPM, Geometry, EncoderOdometry, CommandGate
 from .runner import spin_node
 from .telemetry import AckObservation, encoder_snapshot, serial_snapshot, write_motor_message
 from .vendor import load_control_module
@@ -51,7 +51,7 @@ class BaseBridge(LifecycleNode):
         defaults = dict(backend='mock', port='', drive_calibration='', pid_config='',
                         report_dir='/tmp/omslam-base', left_radius=.068, right_radius=.068,
                         wheel_separation=.480, counts_per_rev=2652, max_rpm=95.,
-                        wheel_vx_variance=.0025, wheel_wz_variance=.01)
+                        min_rpm=MIN_WHEEL_RPM, wheel_vx_variance=.0025, wheel_wz_variance=.01)
         for name,value in defaults.items(): self.declare_parameter(name,value)
         self.lock = threading.RLock()
         self.gate = CommandGate()
@@ -103,7 +103,8 @@ class BaseBridge(LifecycleNode):
                 if not all(self.value(k) for k in ('port','drive_calibration','pid_config')):
                     raise ValueError('serial requires explicit port, drive_calibration and pid_config')
             self.geometry = Geometry(self.value('left_radius'), self.value('right_radius'),
-                                     self.value('wheel_separation'), self.value('counts_per_rev'),self.value('max_rpm'))
+                                     self.value('wheel_separation'), self.value('counts_per_rev'),
+                                     self.value('max_rpm'), self.value('min_rpm'))
             if self.geometry.max_rpm > 95.:
                 raise ValueError('Base bridge operating limit must not exceed 95 RPM')
             vx_variance, wz_variance = (self.value(n) for n in ('wheel_vx_variance','wheel_wz_variance'))
@@ -250,7 +251,7 @@ class BaseBridge(LifecycleNode):
                 return None
             if selected_generation == self.gate.generation and live == selected:
                 return live
-            return live if brake and live[0] == 0. and live[1] == 0. else None
+            return live if brake and self.geometry.rpm(live[0], live[1]) == (0., 0.) else None
 
         try:
             if self.backend == 'serial':
@@ -344,6 +345,7 @@ class BaseBridge(LifecycleNode):
                     if not active: self.stopped.set()
                 else:
                     vx,wz,issued=target
+                    # A sub-floor smoother sample brakes without revoking its source.
                     rpms=self.geometry.rpm(vx,wz)
                     remaining=.3-(now-issued)
                     if drive:

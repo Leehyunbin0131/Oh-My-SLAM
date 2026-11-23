@@ -9,6 +9,7 @@
 #include <string>
 
 #include "dwb_core/dwb_local_planner.hpp"
+#include "dwb_core/trajectory_generator.hpp"
 #include "nav2_core/goal_checker.hpp"
 #include "nav2_core/progress_checker.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
@@ -18,6 +19,7 @@
 #include "rcl/time.h"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/buffer.h"
+#include "drive_geometry.hpp"
 
 namespace
 {
@@ -98,50 +100,140 @@ void run_probe()
       require(rcl_set_ros_time_override(clock, now) == RCL_RET_OK, "offline clock update failed");
     };
 
-  for (double rpm : {1.0, 2.0}) {
+  const auto geometry = omslam_navigation::DriveGeometry::read(parent, "FollowPath");
+  require(geometry.min_rpm == 3. && geometry.max_rpm == 70., "unexpected installed simulation RPM range");
+  pluginlib::ClassLoader<dwb_core::TrajectoryGenerator> generators(
+    "dwb_core", "dwb_core::TrajectoryGenerator");
+  auto generator = generators.createSharedInstance(
+    parent->get_parameter("FollowPath.trajectory_generator_name").as_string());
+  generator->initialize(parent, "FollowPath");
+  for (double rpm : {geometry.min_rpm, 10.0}) {
     State limits;
     limits.operator_enabled = true;
     limits.max_linear_velocity = parent->get_parameter("FollowPath.max_speed_xy").as_double();
     limits.max_angular_velocity = parent->get_parameter("FollowPath.max_vel_theta").as_double();
-    const double full_rpm = limits.max_linear_velocity * 30.0 / (M_PI * 0.068);
-    limits.speed_percent = 100.0 * rpm / full_rpm;
+    const double fraction = rpm / geometry.max_rpm;
+    limits.speed_percent = 100.0 * fraction;
+    limits.auto_linear_limit = limits.max_linear_velocity * fraction;
+    limits.auto_angular_limit = std::min(limits.max_angular_velocity,
+      std::max(limits.max_angular_velocity * fraction, geometry.rotationFloor()));
     pub->publish(limits);
     exec.spin_some();
     dwb.setSpeedLimit(limits.speed_percent, true);
-    for (bool rotate : {false, true}) {
+    auto verify_command = [&](const nav_2d_msgs::msg::Twist2D & cmd) {
+        const double peak = geometry.peakRpm(cmd.x, cmd.theta);
+        require(cmd.y == 0. && std::abs(cmd.x) <= limits.auto_linear_limit + 1e-12 &&
+          std::abs(cmd.theta) <= limits.auto_angular_limit + 1e-12 && peak <= rpm + 1e-12,
+          "DWB candidate exceeded its approved cap");
+        require(peak == 0. || peak >= geometry.min_rpm || geometry.atFloor(peak),
+          "DWB candidate cannot clear the command floor");
+      };
+    generator->setSpeedLimit(limits.speed_percent, true);
+    generator->startNewIteration(nav_2d_msgs::msg::Twist2D{});
+    int zeros = 0;
+    bool straight = false, left = false, right = false;
+    while (generator->hasMoreTwists()) {
+      const auto cmd = generator->nextTwist();
+      verify_command(cmd);
+      const double peak = geometry.peakRpm(cmd.x, cmd.theta);
+      zeros += peak == 0.;
+      if (geometry.atFloor(peak)) {
+        straight |= cmd.x > 0. && cmd.theta == 0.;
+        left |= cmd.x == 0. && cmd.theta > 0.;
+        right |= cmd.x == 0. && cmd.theta < 0.;
+      }
+    }
+    require(zeros == 1 && straight && left && right, "trajectory grid lost a floor endpoint or explicit stop");
+    const auto apply = [&](const geometry_msgs::msg::Twist & cmd) {
+        nav_2d_msgs::msg::Twist2D twist;
+        twist.x = cmd.linear.x;
+        twist.y = cmd.linear.y;
+        twist.theta = cmd.angular.z;
+        verify_command(twist);
+        const auto applied = geometry.applied(twist, rpm);
+        geometry_msgs::msg::Twist output;
+        output.linear.x = applied.x;
+        output.angular.z = applied.theta;
+        return output;
+      };
+    const auto step_pose = [&](geometry_msgs::msg::PoseStamped & p, double & heading,
+        const geometry_msgs::msg::Twist & vel) {
+        const double x = p.pose.position.x + vel.linear.x * .05 * std::cos(heading);
+        const double y = p.pose.position.y + vel.linear.x * .05 * std::sin(heading);
+        heading += vel.angular.z * .05;
+        p = pose(x, y, heading);
+      };
+    for (int turn : {0, 1, -1}) {
       nav_msgs::msg::Path plan;
       plan.header.frame_id = "map";
       for (int i = 0; i <= 40; ++i) {
-        plan.poses.push_back(pose(rotate ? 0.0 : .05 * i, 0.0, rotate ? .03 * i : 0.0));
+        plan.poses.push_back(pose(turn ? 0.0 : .05 * i, 0.0, turn * .03 * i));
       }
       progress->reset();
       goal->reset();
       auto p = pose(0, 0, 0);
       geometry_msgs::msg::Twist vel;
-      double x = 0.0, y = 0.0, heading = 0.0;
-      for (int step = 0; step < 410; ++step) {
+      double heading = 0.0;
+      for (int step = 0; step < 100; ++step) {
         advance(50000000);
         p.header.stamp = parent->now();
         if (step % 20 == 0) {dwb.setPlan(plan);}
         require(progress->check(p), "moving robot failed the progress check");
-        vel = dwb.computeVelocityCommands(p, vel, goal.get()).twist;
-        const double vmax = limits.max_linear_velocity * limits.speed_percent / 100.0;
-        const double wmax = limits.max_angular_velocity * limits.speed_percent / 100.0;
-        require(std::abs(vel.linear.x) <= vmax + 1e-9 && std::abs(vel.angular.z) <= wmax + 1e-9,
-          "DWB command exceeded its approved cap");
-        x += vel.linear.x * .05 * std::cos(heading);
-        y += vel.linear.x * .05 * std::sin(heading);
-        heading += vel.angular.z * .05;
-        p = pose(x, y, heading);
+        vel = apply(dwb.computeVelocityCommands(p, vel, goal.get()).twist);
+        step_pose(p, heading, vel);
       }
-      require(rotate ? std::abs(x) < 1e-9 && heading > .06 * rpm : x > .072 * rpm,
+      require(turn ? std::hypot(p.pose.position.x, p.pose.position.y) < 1e-9 && heading * turn > .25 :
+        p.pose.position.x > 4. * limits.auto_linear_limit,
         "trajectory made insufficient physical progress");
       progress->reset();
       require(progress->check(p), "new progress baseline rejected");
       advance(10100000000LL);
       require(!progress->check(p), "stationary robot passed the stall deadline");
-      std::cout << "rpm=" << rpm << " rotation=" << rotate << " x_m=" << x <<
+      std::cout << "rpm=" << rpm << " turn=" << turn << " x_m=" << p.pose.position.x <<
         " yaw_rad=" << heading << " stall_at_10.1s=true\n";
+    }
+    for (double sign : {1., -1.}) {
+      for (bool already_inside : {false, true}) {
+        const double distance = already_inside ? .049 : .051;
+        const double yaw = sign * (already_inside ? .149 : .151);
+        const auto target_pose = pose(distance, 0., yaw);
+        nav_msgs::msg::Path plan;
+        plan.header.frame_id = "map";
+        if (!already_inside) {plan.poses.push_back(pose(0., 0., 0.));}
+        plan.poses.insert(plan.poses.end(), {pose(distance, 0., 0.),
+          pose(distance, 0., yaw / 2.), target_pose});
+        dwb.setPlan(plan);
+        goal->reset();
+        progress->reset();
+        auto p = pose(0., 0., 0.);
+        double heading = 0.;
+        geometry_msgs::msg::Twist vel;
+        if (already_inside) {vel.linear.x = limits.auto_linear_limit;}
+        require(!goal->isGoalReached(p.pose, target_pose.pose, vel), "arrival precondition was already reached");
+        bool reached = false;
+        for (int step = 0; step < 160; ++step) {
+          advance(50000000);
+          p.header.stamp = parent->now();
+          require(progress->check(p), "near-goal command stalled");
+          vel = apply(dwb.computeVelocityCommands(p, vel, goal.get()).twist);
+          if (already_inside) {
+            require(vel.linear.x == 0. && vel.angular.z == 0., "residual planned turn prevented braking");
+          }
+          step_pose(p, heading, vel);
+          if (goal->isGoalReached(p.pose, target_pose.pose, vel)) {
+            reached = true;
+            break;
+          }
+        }
+        const double xy = std::hypot(distance - p.pose.position.x, p.pose.position.y);
+        const double yaw_error = std::abs(std::remainder(yaw - heading, 2. * M_PI));
+        std::cout << "rpm=" << rpm << " arrival=" << (already_inside ? "inside" : "outside") <<
+          " yaw_sign=" << sign << " xy_m=" << xy << " yaw_rad=" << yaw_error <<
+          " vx=" << vel.linear.x << " wz=" << vel.angular.z << '\n';
+        require(reached && xy <= .05 && yaw_error <= .15 &&
+          std::abs(vel.linear.x) <= .01 && std::abs(vel.angular.z) <= .02,
+          "failed to reach goal tolerance at measured stop");
+      }
     }
   }
   exec.remove_node(parent->get_node_base_interface());

@@ -19,7 +19,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from omslam_base.core import Geometry
 from omslam_base.telemetry import JointTelemetry, with_sim_target, write_motor_message
 from omslam_operator_msgs.msg import MotorTelemetry
-from .control import SIM_MAX_WHEEL_RPM, SimCommandGuard
+from .control import SIM_MAX_WHEEL_RPM, SIM_MIN_WHEEL_RPM, SimCommandGuard
 
 
 def stamp_ns(stamp):
@@ -30,7 +30,8 @@ class SimBase(LifecycleNode):
     def __init__(self):
         super().__init__('sim_base')
         for key, value in {'left_radius': .068, 'right_radius': .068, 'wheel_separation': .480,
-                           'max_rpm': SIM_MAX_WHEEL_RPM, 'wheel_vx_variance': .0025, 'wheel_wz_variance': .01,
+                           'max_rpm': SIM_MAX_WHEEL_RPM, 'min_rpm': SIM_MIN_WHEEL_RPM,
+                           'wheel_vx_variance': .0025, 'wheel_wz_variance': .01,
                            'clock_stall_timeout': .3}.items():
             self.declare_parameter(key, value)
         self.configured = False
@@ -70,7 +71,8 @@ class SimBase(LifecycleNode):
             if not self.val('use_sim_time'):
                 raise ValueError('sim_base requires use_sim_time=true')
             geometry = Geometry(left_radius=self.val('left_radius'), right_radius=self.val('right_radius'),
-                                separation=self.val('wheel_separation'), max_rpm=self.val('max_rpm'))
+                                separation=self.val('wheel_separation'), max_rpm=self.val('max_rpm'),
+                                min_rpm=self.val('min_rpm'))
             stall, vx_variance, wz_variance = (self.val(k) for k in
                                                ('clock_stall_timeout', 'wheel_vx_variance', 'wheel_wz_variance'))
             if not all(math.isfinite(v) and v > 0 for v in (stall, vx_variance, wz_variance)):
@@ -198,12 +200,11 @@ class SimBase(LifecycleNode):
                 or self.latest_clock-self.last_odom_stamp > 400_000_000)):
             self.trigger_deactivate()
             self.guard.reason = 'wheel feedback stale; reactivation required'
-        vx, wz = self.guard.sample(now) if self.configured else (0., 0.)
-        self.publish_velocity(vx, wz)
+        target_rpm = self.guard.sample_rpm(now) if self.configured else (0., 0.)
+        self.publish_velocity(*self.guard.geometry.twist(*target_rpm))
         if self.joint_telemetry.snapshot is not None and now-self.last_motor_publish >= .05:
             published_ns = self.get_clock().now().nanoseconds
-            snapshot = with_sim_target(self.joint_telemetry.snapshot,
-                                       self.guard.geometry.rpm(vx, wz), published_ns)
+            snapshot = with_sim_target(self.joint_telemetry.snapshot, target_rpm, published_ns)
             self.motor.publish(write_motor_message(MotorTelemetry(), snapshot, now, published_ns, KeyValue))
             self.last_motor_publish = now
         if now-self.last_diag >= 1.:

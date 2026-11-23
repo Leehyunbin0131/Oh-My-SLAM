@@ -10,6 +10,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 import yaml
+from omslam_base.core import Geometry
 from omslam_sim.control import SIM_MAX_LINEAR_VELOCITY
 
 from ament_index_python.packages import get_package_share_directory
@@ -184,16 +185,28 @@ def validate_configuration(configuration, share):
     _required_equal(controller['goal_checker_plugins'], ['goal_checker'], 'goal_checker_plugins')
     _required_equal(controller['progress_checker_plugins'], ['progress_checker'], 'progress_checker_plugins')
     dwb = controller['FollowPath']
+    sim_path = Path(get_package_share_directory('omslam_sim')) / 'config/sim_base.yaml'
+    sim = _read_yaml(sim_path)['sim_base']['ros__parameters']
+    drive = {key: float(_number(sim[key], 'sim_base.' + key, minimum=0.000001))
+             for key in ('left_radius', 'right_radius', 'wheel_separation', 'min_rpm', 'max_rpm')}
+    Geometry(drive['left_radius'], drive['right_radius'], drive['wheel_separation'],
+             max_rpm=drive['max_rpm'], min_rpm=drive['min_rpm'])
+    for params, label in ((dwb, 'DWB'), (guard, 'guard')):
+        if 'drive_geometry' in params:
+            _required_equal(params['drive_geometry'], drive, label + ' drive geometry')
+        params['drive_geometry'] = drive.copy()
     _required_equal(dwb['plugin'], 'dwb_core::DWBLocalPlanner', 'controller plugin')
     _required_equal(dwb['trajectory_generator_name'], 'omslam_navigation::SpeedAwareTrajectoryGenerator',
                     'DWB low-speed trajectory generator')
     cell_size = c['local_costmap']['local_costmap']['ros__parameters']['resolution']
     dwb['minimum_projection_distance'] = 2.0 * _number(cell_size, 'local costmap resolution', 0.000001)
-    for critic in ('ObstacleFootprint', 'RotateToGoal'):
+    for critic in ('ObstacleFootprint', 'PlannedTurn', 'RotateToGoal'):
         if critic not in dwb['critics']:
             raise ValueError(f'DWB requires the {critic} critic')
     _number(dwb['ObstacleFootprint.scale'], 'ObstacleFootprint.scale', 0.000001)
+    _number(dwb['PlannedTurn.scale'], 'PlannedTurn.scale', 0.000001)
     _number(dwb['RotateToGoal.scale'], 'RotateToGoal.scale', 0.000001)
+    dwb['RotateToGoal.class'] = 'omslam_navigation::CurrentPoseRotateToGoalCritic'
     for name in ['min_vel_x', 'min_vel_y', 'max_vel_y', 'min_speed_xy', 'min_speed_theta']:
         _required_equal(dwb[name], 0.0, 'DWB.' + name)
     vx = _number(dwb['max_vel_x'], 'DWB.max_vel_x', 0.000001, SIM_MAX_LINEAR_VELOCITY)
@@ -205,7 +218,8 @@ def validate_configuration(configuration, share):
         _number(dwb[name], 'DWB.' + name, maximum=-0.000001)
     xy_tolerance = _number(controller['goal_checker']['xy_goal_tolerance'],
                            'goal xy tolerance', 0.000001, 0.10)
-    _number(controller['goal_checker']['yaw_goal_tolerance'], 'goal yaw tolerance', 0.000001, 0.15)
+    yaw_tolerance = _number(controller['goal_checker']['yaw_goal_tolerance'],
+                            'goal yaw tolerance', 0.000001, 0.15)
     _required_equal(controller['goal_checker']['plugin'],
                     'nav2_controller::StoppedGoalChecker', 'goal checker')
     _required_equal(controller['goal_checker']['stateful'], False, 'current goal XY must be checked')
@@ -218,6 +232,7 @@ def validate_configuration(configuration, share):
     # Revalidation must reject a contradictory resolved configuration as well.
     for params, field, value, label in [
         (dwb, 'xy_goal_tolerance', xy_tolerance, 'DWB terminal XY'),
+        (dwb, 'yaw_goal_tolerance', yaw_tolerance, 'DWB terminal yaw'),
         (dwb, 'trans_stopped_velocity', stopped_velocity, 'DWB stopped translation'),
     ]:
         if field in params:

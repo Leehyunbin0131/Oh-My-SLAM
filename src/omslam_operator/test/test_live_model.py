@@ -1,19 +1,23 @@
 """Fresh ownership and revocable user intent for the simplified ROS GUI."""
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
+from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Time
-from PySide6.QtCore import QCoreApplication, QUrl
-from PySide6.QtQml import QQmlComponent, QQmlEngine
+from PySide6.QtCore import QLocale, QObject, QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlComponent, QQmlEngine, qmlRegisterType
 
 from omslam_operator.live_model import LiveConsoleModel
+from omslam_operator.visuals import RobotMap
 from omslam_operator.worker import Shared
 
 
 @pytest.fixture
 def model():
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = QGuiApplication.instance() or QGuiApplication([])
     shared = Shared()
     value = LiveConsoleModel(shared)
     value.timer.stop()
@@ -25,7 +29,8 @@ def model():
         'operator_enabled': True, 'manual_ready': True, 'auto_ready': True,
         'reverse_allowed': False, 'linear_limit': .1, 'angular_limit': .3,
         'max_linear_velocity': .2, 'max_angular_velocity': .6, 'reason': 'ready'}
-    shared.data['operator'].update(max_wheel_rpm=100., wheel_rpm_limit=50.)
+    shared.data['operator'].update(min_wheel_rpm=3., min_rotation_velocity=17 * np.pi / 600,
+                                   max_wheel_rpm=100., wheel_rpm_limit=50.)
     shared.data['operator'].update(localization_mode='slam', localization_initialized=True)
     shared.data['keepouts'] = {'session_id':'guard-1','revision':0,'polygons':[]}
     shared.map_layers['map'] = {'width': 20, 'height': 20, 'resolution': .1,
@@ -64,6 +69,38 @@ def test_live_ui_qml_binding_updates(model):
     fresh(model)
     model.refresh()
     assert view.property('mode') == 'AUTO'
+    view.deleteLater()
+
+
+def test_installed_driving_page_and_direct_pad_use_server_caps(model):
+    from omslam_navigation.operator_core import OperatorGate
+
+    core = OperatorGate()
+    linear, angular = core.axis_limits(3.)
+    model.s.data['operator'].update(max_wheel_rpm=70., wheel_rpm_limit=35.,
+                                   max_linear_velocity=core.limits.max_vx, max_angular_velocity=.5)
+    own(model, 'MANUAL')
+    model.refresh()
+    qmlRegisterType(RobotMap, 'OhMyRobot', 1, 0, 'NativeMap')
+    engine = QQmlEngine()
+    engine.rootContext().setContextProperty('operatorModel', model)
+    page = Path(get_package_share_directory('omslam_operator')) / 'qml/design/DrivingPage.qml'
+    component = QQmlComponent(engine, QUrl.fromLocalFile(str(page)))
+    view = component.create()
+    assert view is not None, [error.toString() for error in component.errors()]
+    slider = view.findChild(QObject, 'speedSlider')
+    field = view.findChild(QObject, 'rpmLimitInput')
+    pad = view.findChild(QObject, 'directPad')
+    assert (slider.property('from'), slider.property('to'), slider.property('value')) == (3., 70., 35.)
+    model.s.data['operator'].update(wheel_rpm_limit=3., linear_limit=linear, angular_limit=angular)
+    model.refresh()
+    assert slider.property('value') == 3.
+    assert pad.property('linearLimit') == linear and pad.property('angularLimit') == angular
+    decimal = QLocale().decimalPoint()
+    field.setProperty('text', '2' + decimal + '999')
+    assert not field.property('acceptableInput')
+    field.setProperty('text', '17' + decimal + '3456789')
+    assert field.property('acceptableInput')
     view.deleteLater()
 
 
@@ -425,7 +462,8 @@ def test_numeric_rpm_maps_to_authorized_speed_request(model):
     assert req['wheel_rpm_limit']==pytest.approx(37.5)
     assert req['linear_limit']==pytest.approx(.075)
     assert req['angular_limit']==pytest.approx(.225)
-    for value in [0.,-1.,100.1,float('nan')]:model.setRpmLimit(value)
+    for value in [0., 1., 2.9999995, -1., 100.1, float('nan'), float('inf')]:
+        model.setRpmLimit(value)
     assert len(commands(model,'speed'))==1
 
 
@@ -434,8 +472,13 @@ SIM_MAX_LINEAR = 0.49846603436958054
 SIM_MAX_RPM = 70.0
 
 
-@pytest.mark.parametrize('rpm', [1., 17.5, 35., 70.])
-def test_numeric_rpm_reaches_the_exact_simulation_cap(model, rpm):
+@pytest.mark.parametrize('rpm', [3., 17.34567890123456, 35., 70.])
+def test_numeric_rpm_reaches_service_and_both_drive_modes_without_round_trip(model, rpm):
+    from types import SimpleNamespace
+    from omslam_navigation.operator_control import OperatorControl
+    from omslam_navigation.operator_core import OperatorGate
+    from omslam_operator_msgs.srv import SetSpeedLimit
+
     model.s.data['operator'].update(max_linear_velocity=SIM_MAX_LINEAR, linear_limit=SIM_MAX_LINEAR / 2,
                                     max_angular_velocity=.5, max_wheel_rpm=SIM_MAX_RPM,
                                     wheel_rpm_limit=SIM_MAX_RPM / 2)
@@ -447,13 +490,27 @@ def test_numeric_rpm_reaches_the_exact_simulation_cap(model, rpm):
     # The same bounds operator_control.speed() enforces on the service request.
     assert 0 < request['linear_limit'] <= SIM_MAX_LINEAR
     assert 0 < request['angular_limit'] <= .5
-    assert 1. <= request['speed_percent'] <= 100.
-    assert 1. <= request['wheel_rpm_limit'] <= SIM_MAX_RPM
-    assert abs(request['wheel_rpm_limit'] / SIM_MAX_RPM * 100. - request['speed_percent']) < 1e-6
-    assert request['wheel_rpm_limit'] == pytest.approx(rpm)
+    assert request['speed_percent'] == rpm / SIM_MAX_RPM * 100.
+    assert request['wheel_rpm_limit'] == rpm
     assert request['linear_limit'] == pytest.approx(SIM_MAX_LINEAR * rpm / SIM_MAX_RPM)
-    if rpm == SIM_MAX_RPM:
-        assert request['linear_limit'] == SIM_MAX_LINEAR and request['speed_percent'] == 100.
+    assert request['angular_limit'] == pytest.approx(max(.5 * rpm / SIM_MAX_RPM, 17 * np.pi / 600))
+    core = OperatorGate()
+    published = []
+    service = SimpleNamespace(core=core, authorized=lambda token, epoch: (token, epoch) == (model.token, model.epoch),
+                              publish_speed=lambda: published.append(core.wheel_rpm_limit))
+    response = OperatorControl.speed(service, SetSpeedLimit.Request(**request), SetSpeedLimit.Response())
+    assert response.success and response.wheel_rpm_limit == rpm and published == [rpm]
+    for mode in ('MANUAL', 'AUTO'):
+        core.mode = mode
+        vx, *_, wz = core.limit_values((request['linear_limit'], 0., 0., 0., 0., 0.))
+        assert core.geometry.rpm(vx, wz) == pytest.approx((rpm, rpm))
+        for direction in (-1., 1.):
+            vx, *_, wz = core.limit_values((0., 0., 0., 0., 0., direction * request['angular_limit']))
+            assert wz == pytest.approx(direction * request['angular_limit'])
+            if rpm == 3.:
+                assert core.geometry.rpm(vx, wz) == (-direction * 3., direction * 3.)
+    model.refresh()
+    assert model.ui['minRpm'] == 3. and model.ui['maxRpm'] == SIM_MAX_RPM
 
 
 def test_keepout_edit_waits_for_disabled_owner_and_server_snapshot(model):

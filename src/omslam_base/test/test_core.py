@@ -12,7 +12,49 @@ def test_kinematics_and_curvature_limit():
     raw=Geometry(max_rpm=95).rpm(3.,2.)
     assert max(abs(x) for x in raw)==95
     assert raw[0]/raw[1]==pytest.approx((3.-.48)/(3.+.48))
+    with pytest.raises(ValueError):Geometry(max_rpm=70.,min_rpm=-1.)
+    with pytest.raises(ValueError):Geometry(max_rpm=70.,min_rpm=70.)
 
+
+@pytest.mark.parametrize('target', [(0., 0.), (2.9, 2.9), (2.999, 2.999), (-2.999, -2.999),
+                                   (-2.999, 2.999), (2.999, -2.999), (2.9999999995, 2.9999999995)])
+def test_peak_below_floor_is_zero(target):
+    geometry = Geometry()
+    assert geometry.min_rpm == 3.
+    assert geometry.rpm(*geometry.twist(*target)) == (0., 0.)
+
+
+@pytest.mark.parametrize('left,right', [(3., 3.), (-3., -3.), (3., -3.), (-3., 3.),
+                                        (1., 3.), (0., 3.), (-1., 3.)])
+def test_floor_round_trip_preserves_wheel_ratio(left, right):
+    for geometry in (Geometry(), Geometry(left_radius=.065, right_radius=.070, separation=.481)):
+        vx, wz = geometry.twist(left, right)
+        result = geometry.rpm(vx, wz)
+        assert max(map(abs, result)) == pytest.approx(3., abs=4 * math.ulp(3.))
+        assert result == pytest.approx((left, right), abs=4 * math.ulp(3.))
+    geometry = Geometry()
+    vx, _ = geometry.twist(3., 3.)
+    vx = math.nextafter(vx, 0.)
+    assert max(map(abs, geometry.raw_rpm(vx, 0.))) < 3.
+    assert geometry.rpm(vx, 0.) == (3., 3.)
+
+
+def test_floor_cut_does_not_invalidate_source_lease():
+    gate, geometry = CommandGate(), Geometry()
+    stamp = 1_010_000_000
+    gate.activate(1_000_000_000)
+    assert gate.requested(stamp, stamp, 10.)
+    below, _ = geometry.twist(2.999, 2.999)
+    floor, _ = geometry.twist(3., 3.)
+    assert gate.final(stamp, below, 0., stamp, 10.)
+    assert geometry.rpm(*gate.current(10.)[:2]) == (0., 0.)
+    assert gate.final(stamp, floor, 0., stamp + 20_000_000, 10.02)
+    assert geometry.rpm(*gate.current(10.02)[:2]) == (3., 3.)
+    assert gate.current(10.02)[2] == 10.
+    assert gate.final(stamp, 0., 0., stamp + 40_000_000, 10.04)
+    assert not gate.final(stamp, floor, 0., stamp + 60_000_000, 10.06)
+    assert gate.current(10.06) == (0., 0., 10.)
+    assert gate.current(10.301) is None
 
 def test_measured_encoder_se2_and_time_wrap():
     g=Geometry();o=EncoderOdometry(g)

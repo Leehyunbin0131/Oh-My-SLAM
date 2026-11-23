@@ -24,8 +24,13 @@ float64 max_angular_velocity
 float64 linear_limit
 float64 angular_limit
 float64 speed_percent
+float64 min_wheel_rpm
 float64 max_wheel_rpm
 float64 wheel_rpm_limit
+# Pure-rotation speed in rad/s at which the faster wheel reaches min_wheel_rpm.
+float64 min_rotation_velocity
+float64 auto_linear_limit
+float64 auto_angular_limit
 string goal_id
 uint64 goal_stamp_ns
 string navigation_state

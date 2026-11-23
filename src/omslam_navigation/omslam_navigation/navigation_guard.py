@@ -35,7 +35,8 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool
 from tf2_msgs.msg import TFMessage
 from tf2_ros import Buffer, TransformException
-from omslam_sim.control import SIM_MAX_LINEAR_VELOCITY
+from omslam_base.core import Geometry
+from omslam_sim.control import SIM_MAX_LINEAR_VELOCITY, SIM_MAX_WHEEL_RPM, SIM_MIN_WHEEL_RPM
 
 from .guard_core import Limits, NavigationGate
 from .operator_core import OperatorGate
@@ -78,6 +79,11 @@ class NavigationGuard(Node):
             'service_timeout': 2.0, 'readiness_timeout': 30.0,
             'map_jump_translation': 0.10, 'map_jump_rotation': 0.10,
             'max_linear_velocity': SIM_MAX_LINEAR_VELOCITY, 'max_angular_velocity': 0.50,
+            'drive_geometry.left_radius': Geometry.left_radius,
+            'drive_geometry.right_radius': Geometry.right_radius,
+            'drive_geometry.wheel_separation': Geometry.separation,
+            'drive_geometry.min_rpm': SIM_MIN_WHEEL_RPM,
+            'drive_geometry.max_rpm': SIM_MAX_WHEEL_RPM,
             'future_tf_tolerance': 1.0,
             'operator_enabled': False,
             'keepout_file': '',
@@ -109,8 +115,15 @@ class NavigationGuard(Node):
             map_rotation=self.p['map_jump_rotation'],
             max_vx=self.p['max_linear_velocity'], max_wz=self.p['max_angular_velocity'],
             frame=self.p['base_frame'])
-        self.core = (OperatorGate(limits, reverse_allowed=self.p['manual_reverse_enabled'])
-                     if self.p['operator_enabled'] else NavigationGate(limits))
+        if self.p['operator_enabled']:
+            geometry = Geometry(
+                left_radius=self.p['drive_geometry.left_radius'],
+                right_radius=self.p['drive_geometry.right_radius'],
+                separation=self.p['drive_geometry.wheel_separation'],
+                min_rpm=self.p['drive_geometry.min_rpm'], max_rpm=self.p['drive_geometry.max_rpm'])
+            self.core = OperatorGate(limits, reverse_allowed=self.p['manual_reverse_enabled'], geometry=geometry)
+        else:
+            self.core = NavigationGate(limits)
         if self.p['operator_enabled']:
             self.core.stop_deadlines = {k:self.p[k + '_timeout'] for k in ('wheel','odom')}
         self.operator = None

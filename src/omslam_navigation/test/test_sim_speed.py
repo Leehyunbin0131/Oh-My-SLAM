@@ -38,7 +38,12 @@ def test_installed_70_rpm_profile_and_default_operator_fraction():
     assert OperatorGate().limits.max_wz == .5
     for package, filename, expected in [('omslam_sim', 'sim_base.yaml', 70.), ('omslam_base', 'base.yaml', 95.)]:
         data = yaml.safe_load((Path(get_package_share_directory(package)) / 'config' / filename).read_text())
-        assert next(iter(data.values()))['ros__parameters']['max_rpm'] == expected
+        params = next(iter(data.values()))['ros__parameters']
+        assert params['max_rpm'] == expected and params['min_rpm'] == 3.
+        if package == 'omslam_sim':
+            assert dwb['drive_geometry'] == guard['drive_geometry'] == {
+                key: params[key] for key in ('left_radius', 'right_radius', 'wheel_separation', 'min_rpm', 'max_rpm')}
+    assert gate.axis_limits(3.) == pytest.approx((.0213628300444106, .0890117918517108))
     invalid = copy.deepcopy(config)
     invalid['controller_server']['ros__parameters']['FollowPath']['max_vel_x'] = maximum + .01
     with pytest.raises(ValueError):

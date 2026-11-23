@@ -8,7 +8,8 @@ from verify_sim_navigation import command_limit_evidence
 
 
 def test_wheel_limits_are_checked_at_the_actuator():
-    geometry = {'left_radius': .068, 'right_radius': .068, 'wheel_separation': .48, 'max_rpm': 70.}
+    geometry = {'left_radius': .068, 'right_radius': .068, 'wheel_separation': .48,
+                'min_rpm': 3., 'max_rpm': 70.}
     max_v = 70 * math.pi / 30 * geometry['left_radius']
     limits = {'max_linear_velocity': max_v, 'max_angular_velocity': .5}
     topics = ('/cmd_vel/nav', '/cmd_vel/requested', '/cmd_vel/smoothed', '/cmd_vel', '/sim/cmd_vel')
@@ -24,6 +25,26 @@ def test_wheel_limits_are_checked_at_the_actuator():
     events[-1] = event(topics[-1], max_v, .5)
     assert not command_limit_evidence(events, geometry, limits)[topics[-1]]['passed']
     assert not command_limit_evidence(events[:-1], geometry, limits)[topics[-1]]['passed']
+
+
+def test_floor_arrival_checks_every_nonzero_gazebo_command():
+    topic = '/sim/cmd_vel'
+    radius = .068
+    geometry = {'left_radius': radius, 'right_radius': radius, 'wheel_separation': .48,
+                'min_rpm': 3., 'max_rpm': 3.}
+    limits = {'max_linear_velocity': .50, 'max_angular_velocity': .5}
+    def event(vx, wz):
+        return {'topic': topic, 'velocity': [vx, 0., 0., 0., 0., wz]}
+    v = radius * math.pi / 30 * 3.
+    w = 2 * v / .48
+    events = [event(0., 0.), event(v, 0.), event(0., w), event(0., -w), event(0., 0.)]
+    result = command_limit_evidence(events, geometry, limits)[topic]
+    assert result['passed'] and result['nonzero_samples'] == 3 and result['below_floor_samples'] == 0
+    assert result['minimum_nonzero_rpm'] == pytest.approx(3.)
+    result = command_limit_evidence([*events, event(v * (2.9999999995 / 3.), 0.)], geometry, limits)[topic]
+    assert not result['passed'] and result['below_floor_samples'] == 1
+    assert result['max_rpm'] == pytest.approx(3.)
+    assert not command_limit_evidence([events[0]], geometry, limits)[topic]['passed']
 
 
 @pytest.mark.parametrize('tree', ['src', 'install'])

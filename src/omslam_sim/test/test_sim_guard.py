@@ -76,6 +76,30 @@ def test_simulation_default_accepts_70_rpm_straight_before_expiring():
     assert guard.sample(10.32) == (0., 0.)
 
 
+@pytest.mark.parametrize('turn', [False, True])
+@pytest.mark.parametrize('direction', [1., -1.])
+def test_simulation_three_rpm_floor_preserves_original_ramp_lease(turn, direction):
+    guard = active_guard()
+    assert guard.geometry.min_rpm == 3.
+    wheels = (-3. * direction if turn else 3. * direction, 3. * direction)
+    vx, wz = guard.geometry.twist(*wheels)
+    stamp = 1_050_000_000
+    guard.clock(stamp, 10.05)
+    command(guard, stamp, 10.05, vx=vx * (2.999 / 3.), wz=wz * (2.999 / 3.))
+    assert guard.sample(10.05) == (0., 0.)
+    assert guard.target_stamp == stamp and guard.gate.current(10.05)[2] == 10.05
+    guard.clock(stamp + 20_000_000, 10.07)
+    assert guard.final(stamp, vx, wz, 10.07)
+    assert guard.sample_rpm(10.07) == wheels
+    assert guard.sample(10.07) == pytest.approx((vx, wz))
+    assert guard.gate.current(10.07)[2] == 10.05
+    guard.clock(stamp + 40_000_000, 10.09)
+    assert guard.final(stamp, 0., 0., 10.09)
+    guard.clock(stamp + 60_000_000, 10.11)
+    assert not guard.final(stamp, vx, wz, 10.11)
+    assert guard.sample(10.11) == (0., 0.)
+
+
 def test_profile_linear_and_angular_limits_scale_both_wheels_at_70_rpm():
     guard = active_guard()
     # Installed Nav2 profile limits: full straight speed plus 0.5 rad/s yaw.
@@ -150,7 +174,7 @@ def test_wheel_odometry_keeps_payload_and_uses_covariance_cached_at_configure():
     from omslam_sim.sim_base import SimBase
 
     params = {'use_sim_time': True, 'left_radius': .068, 'right_radius': .068, 'wheel_separation': .480,
-              'max_rpm': 70., 'clock_stall_timeout': .3, 'wheel_vx_variance': .0004, 'wheel_wz_variance': .0009}
+              'max_rpm': 70., 'min_rpm': 3., 'clock_stall_timeout': .3, 'wheel_vx_variance': .0004, 'wheel_wz_variance': .0009}
     published = []
     node = SimpleNamespace(val=params.__getitem__, configured=False, latest_clock=None, clock_advanced_at=None,
                            guard=SimCommandGuard(),

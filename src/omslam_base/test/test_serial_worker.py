@@ -226,7 +226,7 @@ def test_motor_log_preserves_latest_rotation(tmp_path):
 T0 = 100.
 
 
-def scripted_worker(monkeypatch, tmp_path, backend, steps):
+def scripted_worker(monkeypatch, tmp_path, backend, steps, *, same_stamp=False):
     """Run one worker loop iteration per (time, intent vx, write delay[, write vx]) step.
 
     The worker, CommandGate and the pinned WheelDrive read only this scripted
@@ -316,7 +316,7 @@ def scripted_worker(monkeypatch, tmp_path, backend, steps):
     def deliver(vx):
         msg = TwistStamped()
         msg.header.frame_id = 'base_footprint'
-        msg.header.stamp = ros.now().to_msg()
+        msg.header.stamp = (Time(nanoseconds=1_000_000_000) if same_stamp else ros.now()).to_msg()
         msg.twist.linear.x = vx
         if vx:
             BaseBridge.requested(node, msg)
@@ -375,6 +375,29 @@ def test_brake_and_moving_lease_lifetime_on_wire_and_mock_target(monkeypatch, tm
         assert [engaged for _, _, engaged in results] == [True, True, True, True, False, False]
     else:
         assert all(not frames for frames, _, _ in results)
+
+
+@pytest.mark.parametrize('direction', [1, -1])
+def test_worker_applies_three_rpm_on_the_same_stamp_then_releases_brake(monkeypatch, tmp_path, direction):
+    geometry = Geometry()
+    below, _ = geometry.twist(direction * 2.999, direction * 2.999)
+    floor, _ = geometry.twist(direction * 3., direction * 3.)
+    results = scripted_worker(monkeypatch, tmp_path, 'serial', [
+        (T0, below, 0.),
+        (T0 + .05, floor, 0.),
+        (T0 + .10, 0., 0.),
+        (T0 + .15, floor, 0.),
+        (T0 + .21, None, 0.),
+        (T0 + .301, None, 0.),
+    ], same_stamp=True)
+    assert results[0] == ([], [0., 0., .3], False)
+    frames, applied, engaged = results[1]
+    assert frames == ['ARM', ('SET_SPEED', direction * 300, direction * 300, 250)]
+    assert engaged and applied == pytest.approx([direction * 3., direction * 3., .25])
+    for frames, applied, engaged in results[2:4]:
+        assert len(frames) == 1 and frames[0][:3] == ('SET_SPEED', 0, 0)
+        assert engaged and applied[0:2] == [0., 0.] and .1 < applied[2] <= .20 + 1e-9
+    assert results[4:] == [(['STOP'], [0., 0., 0.], False)] * 2
 
 
 def test_brake_lease_lost_at_serial_write_stops_until_fresh_intent(monkeypatch, tmp_path):

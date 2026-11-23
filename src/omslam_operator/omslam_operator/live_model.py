@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from PySide6.QtCore import Property, Signal, Slot
+from omslam_base.core import same_float_boundary
+from omslam_navigation.operator_core import speed_axis_limits
 from omslam_operator_msgs.msg import ManualCommand
 
 from .model import ConsoleModel, number
@@ -66,7 +68,7 @@ class LiveConsoleModel(ConsoleModel):
         self._notice_at = 0.
         self._last_debug = 0.
         self._connection_seen = None
-        self._desired_linear = None
+        self._desired_rpm = None
         self._speed_dirty = False
         self._speed_request = None
         self._speed_response_seen = None
@@ -614,11 +616,23 @@ class LiveConsoleModel(ConsoleModel):
 
     @Slot(float)
     def setSpeedLimit(self, linear):
-        if not self._permitted() or not math.isfinite(linear) or linear <= 0:
-            return
         maximum = float(self._control_state.get('max_linear_velocity', 0.))
-        if maximum <= 0 or not maximum / 100. <= linear <= maximum:
-            self._event('속도를 서버가 허용한 RPM 범위 안에서 지정하세요')
+        max_rpm = float(self._control_state.get('max_wheel_rpm', 0.))
+        min_rpm = float(self._control_state.get('min_wheel_rpm', 0.))
+        rpm = max_rpm * (linear / maximum) if maximum > 0. else 0.
+        self.setRpmLimit(min_rpm if same_float_boundary(rpm, min_rpm) else rpm)
+
+    @Slot(float)
+    def setRpmLimit(self, rpm):
+        if not self._permitted():
+            return
+        minimum = float(self._control_state.get('min_wheel_rpm', 0.))
+        maximum = float(self._control_state.get('max_wheel_rpm', 0.))
+        if minimum <= 0. or maximum < minimum:
+            self._event('서버에서 RPM 범위를 확인하는 중입니다')
+            return
+        if not minimum <= rpm <= maximum:
+            self._event(f'RPM을 {minimum:g}–{maximum:g} 범위로 입력하세요')
             return
         if not self._owned():
             pending_speed = self._pending and self._pending['kind'] == 'speed'
@@ -627,19 +641,9 @@ class LiveConsoleModel(ConsoleModel):
             if not self._fresh() or self._control_state.get('owner_id') not in ('', self.owner):
                 self._drop_control('제어 상태가 변경되어 속도 요청을 취소했습니다')
                 return
-        self._desired_linear, self._speed_dirty = float(linear), True
+        self._desired_rpm, self._speed_dirty = float(rpm), True
         self._advance_pending()
         self._apply_speed()
-
-    @Slot(float)
-    def setRpmLimit(self, rpm):
-        maximum = float(self._control_state.get('max_wheel_rpm', 0.))
-        if not math.isfinite(rpm) or not 1. <= rpm <= maximum:
-            self._event('RPM을 1 이상 서버 최대 RPM 이하로 입력하세요')
-            return
-        # Scale by the ratio first: rpm == maximum gives exactly 1.0, so the
-        # top of the range is never rounded above max_linear_velocity.
-        self.setSpeedLimit(float(self._control_state['max_linear_velocity']) * (rpm / maximum))
 
     def _apply_speed(self):
         if not self._speed_dirty or self._speed_request or self._request or not self._owned():
@@ -647,24 +651,25 @@ class LiveConsoleModel(ConsoleModel):
         op = self._control_state
         if op.get('phase') == 'TRANSITION':
             return
-        maximum = float(op.get('max_linear_velocity', 0.))
-        linear = self._desired_linear
-        if not maximum or not linear:
-            return
-        percent = linear / maximum * 100.
-        if not 1. <= percent <= 100.:
+        rpm = self._desired_rpm
+        min_rpm = float(op.get('min_wheel_rpm', 0.))
+        max_rpm = float(op.get('max_wheel_rpm', 0.))
+        if not 0. < min_rpm <= rpm <= max_rpm:
             self._speed_dirty = False
             self._pending = None
             self._event('서버의 속도 범위가 변경되었습니다. 속도를 다시 선택하세요')
             return
+        fraction = rpm / max_rpm
+        linear, angular = speed_axis_limits(float(op['max_linear_velocity']),
+                                           float(op['max_angular_velocity']),
+                                           float(op['min_rotation_velocity']), fraction)
         request_id = uuid.uuid4().hex
-        self._speed_request = {'id': request_id, 'linear': linear, 'sent': time.monotonic()}
+        self._speed_request = {'id': request_id, 'sent': time.monotonic()}
         self._speed_dirty = False
         self.command('speed', {'token': self.token, 'epoch': self.epoch,
             'request_id': request_id, 'linear_limit': linear,
-            'angular_limit': float(op.get('max_angular_velocity', .6)) * percent / 100.,
-            'speed_percent': percent,
-            'wheel_rpm_limit': float(op.get('max_wheel_rpm', 0.)) * percent / 100.})
+            'angular_limit': angular, 'speed_percent': fraction * 100.,
+            'wheel_rpm_limit': rpm})
 
     @staticmethod
     def _path(path):
@@ -876,7 +881,8 @@ class LiveConsoleModel(ConsoleModel):
               'keepoutBusy': bool(self._keepout_request or (self._pending and self._pending['kind']=='keepout')),
               'keepoutAvailable': bool(self._keepout_available and fresh and map_ready and not self.read_only and not owner_busy),
               'maxRpm': float(op.get('max_wheel_rpm', 0.)),
-              'rpmLimit': float(op.get('wheel_rpm_limit', 0.)), 'minRpm': 1., 'rpmStep': .1,
+              'rpmLimit': float(op.get('wheel_rpm_limit', 0.)),
+              'minRpm': float(op.get('min_wheel_rpm', 0.)), 'rpmStep': .1,
               'canSetInitialPose': fresh and map_ready and op.get('localization_mode') == 'amcl',
               'mapReady': map_ready, 'mapName': self._map_name or ('ROS 지도' if map_ready else '지도 대기'),
               'needsInitialPose': bool(needs_pose), 'routeBusy': bool(self.queueBusy or (self._pending and self._pending['kind'] == 'route')),

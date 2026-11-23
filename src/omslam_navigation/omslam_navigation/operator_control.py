@@ -11,6 +11,7 @@ from lifecycle_msgs.msg import State, Transition
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav2_msgs.action import NavigateToPose
 from nav2_msgs.msg import SpeedLimit
+from omslam_base.core import same_float_boundary
 from omslam_operator_msgs.action import OperatorNavigate
 from omslam_operator_msgs.msg import ManualCommand, OperatorState, OwnerHeartbeat
 from omslam_operator_msgs.srv import Control, SetSpeedLimit
@@ -233,17 +234,22 @@ class OperatorControl:
         return response
 
     def speed(self, request, response):
-        valid = self.authorized(request.token, request.epoch)
-        rpm = request.wheel_rpm_limit or self.core.geometry.max_rpm * request.speed_percent / 100.
-        numeric = (request.linear_limit, request.angular_limit, request.speed_percent)
-        valid = valid and all(math.isfinite(x) for x in numeric) and (
+        geometry = self.core.geometry
+        percent = request.speed_percent
+        rpm = request.wheel_rpm_limit or geometry.max_rpm * (percent / 100.)
+        if 0. < rpm < geometry.min_rpm and same_float_boundary(rpm, geometry.min_rpm):
+            rpm = geometry.min_rpm
+        expected_percent = rpm / geometry.max_rpm * 100.
+        valid = self.authorized(request.token, request.epoch) and (
             0 < request.linear_limit <= self.core.limits.max_vx and
             0 < request.angular_limit <= self.core.limits.max_wz and
-            1.0 <= request.speed_percent <= 100.0 and
-            math.isfinite(rpm) and 1.0 <= rpm <= self.core.geometry.max_rpm and
-            abs(rpm / self.core.geometry.max_rpm * 100. - request.speed_percent) < 1e-6)
+            0 < percent <= 100. and geometry.min_rpm <= rpm <= geometry.max_rpm and
+            same_float_boundary(percent, expected_percent))
         if valid:
-            self.core.linear_limit, self.core.angular_limit, self.core.speed_percent = numeric
+            linear, angular = self.core.axis_limits(rpm)
+            self.core.linear_limit = min(linear, request.linear_limit)
+            self.core.angular_limit = min(angular, request.angular_limit)
+            self.core.speed_percent = expected_percent
             self.core.wheel_rpm_limit = rpm
             self.publish_speed()
             # Already buffered downstream samples remain stamped, and their
@@ -450,7 +456,10 @@ class OperatorControl:
         message.max_linear_velocity, message.max_angular_velocity = self.core.limits.max_vx, self.core.limits.max_wz
         message.linear_limit, message.angular_limit, message.speed_percent = self.core.linear_limit, self.core.angular_limit, self.core.speed_percent
         message.max_wheel_rpm = self.core.geometry.max_rpm
+        message.min_wheel_rpm = self.core.geometry.min_rpm
+        message.min_rotation_velocity = self.core.rotation_floor
         message.wheel_rpm_limit = self.core.wheel_rpm_limit
+        message.auto_linear_limit, message.auto_angular_limit = self.core.axis_limits(self.core.wheel_rpm_limit)
         message.goal_id, message.navigation_state = self.core.goal_id or '', self.core.state
         message.goal_stamp_ns = self.core.goal_stamp
         message.heartbeat_age = wall - self.core.owner_at if self.core.owner_at is not None else -1.0

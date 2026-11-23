@@ -50,6 +50,7 @@ SCENARIO_CHECKS = {
     'integrated': ALL_CHECKS,
     'five-goals': FIVE_GOAL_CHECKS,
     'cancel-and-turn': ['V4-01', 'maximum_speed_stop', 'low_speed_stop', 'left_turn', 'right_turn'],
+    'floor-arrival': ['V4-01', 'floor_arrival', 'floor_command_samples'],
 }
 
 
@@ -88,12 +89,18 @@ def command_limit_evidence(events, geometry, limits):
         half_track = geometry['wheel_separation'] / 2
         left = (vx - half_track * wz) * (30 / math.pi) / geometry['left_radius']
         right = (vx + half_track * wz) * (30 / math.pi) / geometry['right_radius']
-        peak_rpm = float(max(np.max(np.abs(left)), np.max(np.abs(right))))
+        peaks = np.maximum(np.abs(left), np.abs(right))
+        peak_rpm = float(np.max(peaks))
         peak_vx, peak_wz = float(np.max(np.abs(vx))), float(np.max(np.abs(wz)))
         passed = (np.all(values[:, 1:5] == 0) and peak_vx <= limits['max_linear_velocity'] + 1e-6
                   and peak_wz <= limits['max_angular_velocity'] + 1e-6)
         if topic == '/sim/cmd_vel':
-            passed = passed and 0 < peak_rpm <= geometry['max_rpm'] + 1e-6
+            nonzero = peaks[np.any(values != 0., axis=1)]
+            floor = geometry['min_rpm']
+            below_floor = int(np.count_nonzero(nonzero < floor - 8 * math.ulp(floor)))
+            stage.update(nonzero_samples=len(nonzero), below_floor_samples=below_floor,
+                         minimum_nonzero_rpm=float(np.min(nonzero)) if len(nonzero) else None)
+            passed = passed and len(nonzero) > 0 and below_floor == 0 and peak_rpm <= geometry['max_rpm'] + 1e-6
         stage.update(passed=bool(passed), max_abs_vx=peak_vx, max_abs_wz=peak_wz, max_rpm=peak_rpm)
     return stages
 
@@ -560,11 +567,16 @@ class NavigationRun:
                   'velocity_smoother':{'enable_stamped_cmd_vel':True,'stamp_smoothed_velocity_with_smoothing_time':False}}
         observed={node:self.parameter(node,list(values)) for node,values in expected.items()}
         self.e.detail('I0.actual_plugin_parameters',all(observed[node]==values for node,values in expected.items()),parameters=observed)
-        self.drive_geometry = self.parameter('sim_base', ['left_radius', 'right_radius', 'wheel_separation', 'max_rpm'])
+        self.drive_geometry = self.parameter('sim_base', ['left_radius', 'right_radius', 'wheel_separation', 'min_rpm', 'max_rpm'])
         self.drive_limits = self.parameter('navigation_guard', ['max_linear_velocity', 'max_angular_velocity'])
+        geometry_keys = {node: {prefix + key: value for key, value in self.drive_geometry.items()}
+                         for node, prefix in [('navigation_guard', 'drive_geometry.'),
+                                              ('controller_server', 'FollowPath.drive_geometry.')]}
+        shared_geometry = {node: self.parameter(node, list(values)) for node, values in geometry_keys.items()}
         self.e.detail('I0.drive_limits', all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0
-                      for v in (*self.drive_geometry.values(), *self.drive_limits.values())),
-                      geometry=self.drive_geometry, limits=self.drive_limits)
+                      for v in (*self.drive_geometry.values(), *self.drive_limits.values()))
+                      and shared_geometry == geometry_keys,
+                      geometry=self.drive_geometry, limits=self.drive_limits, shared_geometry=shared_geometry)
         dumps={}
         for node in ('planner_server','controller_server','velocity_smoother','bt_navigator',
                      'global_costmap/global_costmap','local_costmap/local_costmap','navigation_guard','obstacle_memory'):
@@ -936,6 +948,37 @@ class NavigationRun:
         late=late_cancel_commands(self.command_events,start,terminal)
         self.e.detail('cancel_no_late_nonzero',not late,late=late)
         return entry
+
+    def run_floor_arrival(self):
+        from nav2_msgs.msg import SpeedLimit
+        self.initialize()
+        floor, cap = self.drive_geometry['min_rpm'], self.drive_geometry['max_rpm']
+        self.e.detail('configured_3_rpm_floor', floor == 3. and cap == SIM_CAP_RPM, geometry=self.drive_geometry)
+        publisher = self.node.create_publisher(SpeedLimit, '/speed_limit', 10)
+        self.until(lambda: publisher.get_subscription_count() > 0, 5., 'speed limit subscriber')
+        limit = SpeedLimit(percentage=True, speed_limit=100. * (floor / cap))
+        limit.header.stamp = self.node.get_clock().now().to_msg()
+        publisher.publish(limit)
+        self.wait_sim(.3)
+        self.stage = 'floor_arrival'
+        start = self.map_pose()
+        goal = compose(start, [.25, 0., math.pi / 8])
+        self.send_goal(goal, self.stage)
+        entry = self.finish_goal(timeout=40)
+        final_pose = self.map_pose()
+        xy = float(np.linalg.norm(final_pose[:2] - goal[:2]))
+        yaw_error = abs(angle_delta(final_pose[2], goal[2]))
+        stop = self.metrics['stops'][-1]
+        stopped_for = (stop['last_stop_stamp_ns'] - stop['first_stop_stamp_ns']) * 1e-9
+        self.e.check('floor_arrival', entry['status'] == 4 and xy <= .05 and yaw_error <= .15 and stopped_for >= .30,
+                     xy_m=xy, yaw_rad=yaw_error, stopped_for_s=stopped_for, measured_stop=stop,
+                     final_map_pose=final_pose, target=goal, requested_rpm=floor)
+        self.enable(False)
+        self.wait_sim(.3)
+        applied = dict(command_limit_evidence(
+            self.command_events, {**self.drive_geometry, 'max_rpm': floor}, self.drive_limits)['/sim/cmd_vel'])
+        passed = applied.pop('passed')
+        self.e.check('floor_command_samples', passed, **applied)
 
     def run_cancel_and_turn(self):
         from nav2_msgs.msg import SpeedLimit
@@ -1636,6 +1679,7 @@ def main():
     entries.append(entry);ledger.write_text(json.dumps(entries,indent=2)+'\n')
     try:
         if args.scenario=='cancel-and-turn':run.run_cancel_and_turn()
+        elif args.scenario=='floor-arrival':run.run_floor_arrival()
         elif args.scenario=='five-goals':run.run_five_goals()
         else:run.run(checks)
     except Exception as exc:

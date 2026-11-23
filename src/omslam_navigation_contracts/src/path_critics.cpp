@@ -1,11 +1,14 @@
 // Copyright 2026 Oh My SLAM contributors. Apache-2.0.
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 #include "angles/angles.h"
 #include "dwb_core/exceptions.hpp"
 #include "dwb_critics/obstacle_footprint.hpp"
 #include "dwb_critics/oscillation.hpp"
+#include "dwb_critics/rotate_to_goal.hpp"
+#include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
 namespace omslam_navigation
@@ -111,12 +114,43 @@ static double remainingTurn(const Pose & pose, const Path & path, double resolut
   return remaining * std::copysign(1., sweep) > 0.075 ? remaining : 0.;
 }
 
+class CurrentPoseRotateToGoalCritic : public dwb_critics::RotateToGoalCritic
+{
+public:
+  void onInit() override
+  {
+    RotateToGoalCritic::onInit();
+    xy_goal_tolerance_ = node_.lock()->get_parameter(dwb_plugin_name_ + ".xy_goal_tolerance").as_double();
+  }
+
+  bool prepare(const Pose & pose, const Twist & vel, const Pose & goal, const Path & plan) override
+  {
+    if (std::hypot(goal.x - pose.x, goal.y - pose.y) > xy_goal_tolerance_) {
+      // The stopped goal checker also rechecks current XY after braking drift.
+      reset();
+    }
+    return RotateToGoalCritic::prepare(pose, vel, goal, plan);
+  }
+
+private:
+  double xy_goal_tolerance_{0.};
+};
+
 class PlannedOscillationCritic : public dwb_critics::OscillationCritic
 {
 public:
+  void onInit() override
+  {
+    OscillationCritic::onInit();
+    xy_goal_tolerance_ = node_.lock()->get_parameter(dwb_plugin_name_ + ".xy_goal_tolerance").as_double();
+  }
+
   bool prepare(const Pose & pose, const Twist & vel, const Pose & goal, const Path & plan) override
   {
     remaining_ = remainingTurn(pose, plan, costmap_ros_->getCostmap()->getResolution());
+    if (remaining_ == 0. && std::hypot(goal.x - pose.x, goal.y - pose.y) <= xy_goal_tolerance_) {
+      remaining_ = angles::shortest_angular_distance(pose.theta, goal.theta);
+    }
     return OscillationCritic::prepare(pose, vel, goal, plan);
   }
 
@@ -131,24 +165,49 @@ public:
     return OscillationCritic::scoreTrajectory(trajectory);
   }
 private:
-  double remaining_{0.};
+  double remaining_{0.}, xy_goal_tolerance_{0.};
 };
 
 class PlannedTurnCritic : public dwb_core::TrajectoryCritic
 {
 public:
-  bool prepare(const Pose & pose, const Twist & velocity, const Pose &, const Path & path) override
+  void onInit() override
+  {
+    auto node = node_.lock();
+    const auto number = [&](const std::string & name, double fallback) {
+        const auto key = dwb_plugin_name_ + "." + name;
+        nav2_util::declare_parameter_if_not_declared(node, key, rclcpp::ParameterValue(fallback));
+        return node->get_parameter(key).as_double();
+      };
+    xy_goal_tolerance_ = number("xy_goal_tolerance", 0.05);
+    yaw_goal_tolerance_ = number("yaw_goal_tolerance", 0.15);
+  }
+
+  bool prepare(const Pose & pose, const Twist & velocity, const Pose & goal, const Path & path) override
   {
     translation_limit_ = std::abs(velocity.x);
     remaining_ = remainingTurn(pose, path, costmap_ros_->getCostmap()->getResolution());
+    const double yaw_error = angles::shortest_angular_distance(pose.theta, goal.theta);
+    const bool xy_reached = std::hypot(goal.x - pose.x, goal.y - pose.y) <= xy_goal_tolerance_;
+    pose_reached_ = xy_reached && std::abs(yaw_error) <= yaw_goal_tolerance_;
+    if (xy_reached && remaining_ == 0.) {remaining_ = yaw_error;}
     return true;
   }
 
   double scoreTrajectory(const Trajectory & trajectory) override
   {
+    const auto & v = trajectory.velocity;
+    const bool stopping = v.x == 0. && v.y == 0. && v.theta == 0.;
+    if (stopping) {
+      // Let a collision-checked stop brake at the goal or serve as a fallback
+      // when all moving candidates are illegal. Never let it win a motion tie.
+      return pose_reached_ ? 0. : std::numeric_limits<float>::max();
+    }
+    if (pose_reached_) {
+      throw dwb_core::IllegalTrajectoryException(name_, "Brake within final pose tolerance");
+    }
     if (remaining_ == 0.) {return 0.;}
-    if (trajectory.velocity.theta * remaining_ <= 0. ||
-      std::abs(trajectory.velocity.x) > translation_limit_ + 1e-6) {
+    if (v.theta * remaining_ <= 0. || std::abs(v.x) > translation_limit_ + 1e-6) {
       throw dwb_core::IllegalTrajectoryException(name_, "Rotation opposes planned in-place turn");
     }
     double motion = 0.;
@@ -159,8 +218,11 @@ public:
   }
 private:
   double remaining_{0.}, translation_limit_{0.};
+  double xy_goal_tolerance_{0.}, yaw_goal_tolerance_{0.};
+  bool pose_reached_{false};
 };
 }  // namespace omslam_navigation
 PLUGINLIB_EXPORT_CLASS(omslam_navigation::FilledFootprintCritic, dwb_core::TrajectoryCritic)
 PLUGINLIB_EXPORT_CLASS(omslam_navigation::PlannedTurnCritic, dwb_core::TrajectoryCritic)
 PLUGINLIB_EXPORT_CLASS(omslam_navigation::PlannedOscillationCritic, dwb_core::TrajectoryCritic)
+PLUGINLIB_EXPORT_CLASS(omslam_navigation::CurrentPoseRotateToGoalCritic, dwb_core::TrajectoryCritic)

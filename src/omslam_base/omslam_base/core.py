@@ -3,6 +3,14 @@ from dataclasses import dataclass
 import math
 
 
+MIN_WHEEL_RPM = 3.0
+
+
+def same_float_boundary(value, boundary):
+    """Allow only round-off from converting the same physical endpoint."""
+    return abs(value - boundary) <= 8 * math.ulp(boundary)
+
+
 @dataclass(frozen=True)
 class Geometry:
     left_radius: float = .068
@@ -10,24 +18,42 @@ class Geometry:
     separation: float = .480
     counts_per_rev: int = 2652
     max_rpm: float = 95.
+    min_rpm: float = MIN_WHEEL_RPM
 
     def __post_init__(self):
         if any(not math.isfinite(v) or v <= 0 for v in
                (self.left_radius, self.right_radius, self.separation, self.max_rpm)):
             raise ValueError('Geometry and RPM limit must be positive finite values')
+        if not math.isfinite(self.min_rpm) or self.min_rpm < 0 or self.min_rpm >= self.max_rpm:
+            raise ValueError('Minimum wheel RPM must be finite and in [0, max_rpm)')
         if type(self.counts_per_rev) is not int or self.counts_per_rev <= 0 or self.max_rpm > 100:
             raise ValueError('Invalid encoder resolution or physical limit above 100 RPM')
 
-    def rpm(self, vx, wz):
+    def raw_rpm(self, vx, wz):
         if not all(math.isfinite(v) for v in (vx, wz)):
             raise ValueError('Nonfinite velocity')
         left = (vx-wz*self.separation/2)/self.left_radius*30/math.pi
         right = (vx+wz*self.separation/2)/self.right_radius*30/math.pi
         if not math.isfinite(left) or not math.isfinite(right):
             raise ValueError('Wheel RPM calculation overflow')
-        scale = min(1., self.max_rpm/max(abs(left), abs(right), 1e-30))
-        # Multiplication can otherwise overshoot the calibrated limit by one ULP.
-        return tuple(max(-self.max_rpm, min(self.max_rpm, rpm * scale)) for rpm in (left, right))
+        return left, right
+
+    def twist(self, left, right):
+        vl = left * math.pi / 30 * self.left_radius
+        vr = right * math.pi / 30 * self.right_radius
+        return (vl + vr) / 2, (vr - vl) / self.separation
+
+    def rpm(self, vx, wz):
+        left, right = self.raw_rpm(vx, wz)
+        peak = max(abs(left), abs(right))
+        if peak > self.max_rpm:
+            # Divide first so the larger wheel lands exactly on the cap.
+            return (left / peak) * self.max_rpm, (right / peak) * self.max_rpm
+        if 0. < peak < self.min_rpm:
+            if same_float_boundary(peak, self.min_rpm):
+                return (left / peak) * self.min_rpm, (right / peak) * self.min_rpm
+            return 0., 0.
+        return left, right
 
 
 class EncoderOdometry:

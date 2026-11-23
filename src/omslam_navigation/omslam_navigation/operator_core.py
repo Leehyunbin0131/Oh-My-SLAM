@@ -9,7 +9,11 @@ import secrets
 
 from .guard_core import NavigationGate
 from omslam_base.core import CLOCK_SKEW_S, Geometry
-from omslam_sim.control import SIM_MAX_WHEEL_RPM
+from omslam_sim.control import SIM_MAX_WHEEL_RPM, SIM_MIN_WHEEL_RPM
+
+
+def speed_axis_limits(max_vx, max_wz, rotation_floor, fraction, linear_floor=0.):
+    return min(max_vx, max(max_vx * fraction, linear_floor)), min(max_wz, max(max_wz * fraction, rotation_floor))
 
 
 class OperatorGate(NavigationGate):
@@ -17,7 +21,7 @@ class OperatorGate(NavigationGate):
     STOP_HOLD = 0.30
     STOP_FRESH = 0.20
 
-    def __init__(self, limits=None, reverse_allowed=False):
+    def __init__(self, limits=None, reverse_allowed=False, geometry=None):
         super().__init__(limits)
         self.mode = 'DISABLED'
         self.pending_mode = None
@@ -31,10 +35,11 @@ class OperatorGate(NavigationGate):
         self.canceled_goals = set()
         self.reverse_allowed = reverse_allowed
         self.speed_percent = 50.0
-        self.geometry = Geometry(max_rpm=SIM_MAX_WHEEL_RPM)
+        self.geometry = geometry or Geometry(max_rpm=SIM_MAX_WHEEL_RPM, min_rpm=SIM_MIN_WHEEL_RPM)
         self.wheel_rpm_limit = self.geometry.max_rpm * self.speed_percent / 100.
-        self.linear_limit = self.limits.max_vx * self.speed_percent / 100.
-        self.angular_limit = self.limits.max_wz * self.speed_percent / 100.
+        self.linear_floor = self.geometry.min_rpm / max(map(abs, self.geometry.raw_rpm(1., 0.)))
+        self.rotation_floor = self.geometry.min_rpm / max(map(abs, self.geometry.raw_rpm(0., 1.)))
+        self.linear_limit, self.angular_limit = self.axis_limits(self.wheel_rpm_limit)
         self.stop_deadlines = dict(wheel=self.STOP_FRESH, odom=self.STOP_FRESH)
         self.stop_samples = {}
         self.stopped_since = None
@@ -191,29 +196,30 @@ class OperatorGate(NavigationGate):
         return (vy == vz == wx == wy == 0 and minimum - 1e-9 <= vx <= self.limits.max_vx + 1e-6
                 and abs(wz) <= self.limits.max_wz + 1e-6)
 
+    def axis_limits(self, rpm):
+        return speed_axis_limits(self.limits.max_vx, self.limits.max_wz, self.rotation_floor,
+                                 rpm / self.geometry.max_rpm, self.linear_floor)
+
     def limit_values(self, values):
         vx, vy, vz, wx, wy, wz = values
+        linear, angular = self.axis_limits(self.wheel_rpm_limit)
         if self.mode == 'MANUAL':
-            linear, angular = self.linear_limit, self.angular_limit
-        else:
-            linear = self.limits.max_vx * self.speed_percent / 100.0
-            angular = self.limits.max_wz * self.speed_percent / 100.0
+            linear, angular = min(linear, self.linear_limit), min(angular, self.angular_limit)
         minimum = -linear if self.mode == 'MANUAL' and self.reverse_allowed else 0.0
         vx, wz = max(minimum, min(linear, vx)), max(-angular, min(angular, wz))
         # Coupled scaling caps both wheels even while translating and turning.
-        # Use unsaturated kinematics: Geometry.rpm() itself clips at max_rpm.
-        left = (vx - wz * self.geometry.separation / 2) / self.geometry.left_radius * 30 / math.pi
-        right = (vx + wz * self.geometry.separation / 2) / self.geometry.right_radius * 30 / math.pi
-        scale = min(1., self.wheel_rpm_limit / max(abs(left), abs(right), 1e-30))
-        return (vx * scale, vy, vz, wx, wy, wz * scale)
+        peak = max(map(abs, self.geometry.raw_rpm(vx, wz)))
+        if peak > self.wheel_rpm_limit:
+            scale = self.wheel_rpm_limit / peak
+            vx, wz = vx * scale, wz * scale
+        return (vx, vy, vz, wx, wy, wz)
 
     def limit_final(self, stamp, values):
-        limited = self.limit_values(values)
         source = self.sources.get(stamp)
         if self.mode == 'MANUAL' and source is not None and not source.linear_requested:
             # OPEN_LOOP can retain translation across a release and new turn.
-            return (0., *limited[1:])
-        return limited
+            values = (0., *values[1:])
+        return self.limit_values(values)
 
     def brake_manual(self, reason, require_release=True):
         self.manual_at = None

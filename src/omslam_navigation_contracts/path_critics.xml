@@ -2,4 +2,5 @@
   <class type="omslam_navigation::FilledFootprintCritic" base_class_type="dwb_core::TrajectoryCritic"/>
   <class type="omslam_navigation::PlannedTurnCritic" base_class_type="dwb_core::TrajectoryCritic"/>
   <class type="omslam_navigation::PlannedOscillationCritic" base_class_type="dwb_core::TrajectoryCritic"/>
+  <class type="omslam_navigation::CurrentPoseRotateToGoalCritic" base_class_type="dwb_core::TrajectoryCritic"/>
 </library>

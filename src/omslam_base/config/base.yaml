@@ -6,6 +6,7 @@ base_bridge:
     wheel_separation: 0.480
     counts_per_rev: 2652
     max_rpm: 95.0
+    min_rpm: 3.0
     wheel_vx_variance: 0.0025
     wheel_wz_variance: 0.01
     port: ''
