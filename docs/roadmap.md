@@ -48,7 +48,7 @@ flowchart LR
 2. `omslam_base`의 차동구동 변환, 바퀴 상한 축소, 엔코더 SE(2) odometry, timestamp와 deadline 처리를 ROS 의존성 없는 작은 모듈로 떼어 작성합니다.
 3. 호스트 `WheelDrive`에 원본 monotonic 시각을 넘길 수 있는 호환 API를 추가하고, 새 명령과 같은 stamp의 평활 출력 갱신을 구분합니다. 필요한 변경만 별도 커밋으로 남겨 버전을 고정합니다. 장애물 정지나 명시적 정지는 일반 송신 주기보다 먼저 처리하고, 남은 lease가 100 ms 미만이면 바로 `STOP`으로 보냅니다.
 4. `rclpy.lifecycle.LifecycleNode` 기반 브리지를 만듭니다. configure에서 설정 검증과 장치 준비를, activate에서 명령 수락을, deactivate와 오류 상황에서는 목표 폐기와 출력 해제를 처리합니다.
-5. 시리얼 포트를 혼자 담당하는 worker, 최신 값 1개만 들고 있는 큐, `MockMotorClient`를 붙입니다. ROS 콜백 안에서는 ACK를 기다리지 않습니다.
+5. 시리얼 포트를 단독으로 담당하는 worker, 최신 값 1개만 보관하는 큐, `MockMotorClient`를 붙입니다. ROS 콜백 안에서는 ACK를 기다리지 않습니다.
 6. `/wheel/odometry`, `/joint_states`, `/diagnostics`와 명령 소스 감시를 붙입니다. 기본 시작 상태는 비활성·장치 미연결 프로파일입니다.
 
 **핵심 산출물:** ROS base 패키지, vendor 패키지, mock adapter, 명령·피드백 단위 시험, 설정 예제, `base.launch.py`.

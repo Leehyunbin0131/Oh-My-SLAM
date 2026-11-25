@@ -36,7 +36,7 @@
 - 도착 판정은 `StoppedGoalChecker`(`stateful=false`, XY `0.05 m`, yaw `0.15 rad`, 정지 속도 `0.01 m/s`와 `0.02 rad/s`)가 매 주기 위치, 방향, 측정 정지를 같이 확인합니다.
 - 속도 명령은 `/cmd_vel/nav` → `navigation_guard` → `/cmd_vel/requested` → `velocity_smoother` → `/cmd_vel/smoothed` → `navigation_guard` → `/cmd_vel` → base 순서로 흐르며, 원본 timestamp 유지와 300 ms 명령 수명 검사를 끝까지 지킵니다.
 
-공식 문서의 최신 Jazzy 브랜치와 내 PC에 실제로 깔린 바이너리가 100% 같다고 가정하지 않습니다. 특히 stamped velocity 옵션이나 smoother timestamp 보존 옵션은 설치된 바이너리의 선언 파라미터와 실제 메시지로 확인합니다.
+공식 문서의 최신 Jazzy 브랜치와 개발 PC에 실제로 설치된 바이너리가 100% 같다고 가정하지 않습니다. 특히 stamped velocity 옵션이나 smoother timestamp 보존 옵션은 설치된 바이너리의 선언 파라미터와 실제 메시지로 확인합니다.
 
 ## 제어 계층 규격
 

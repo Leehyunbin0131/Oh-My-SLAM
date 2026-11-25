@@ -66,7 +66,7 @@ colcon build --packages-up-to omslam_sim \
 | `./sim.sh gui_renderer:=ogre2` | GUI 렌더러도 Ogre2로 지정 |
 | `ros2 launch omslam_sim airport.launch.py` | 로봇 없이 공항 환경만 실행(install source 필요) |
 
-종료할 때는 `Ctrl+C`를 누릅니다. 실행 스크립트가 자신이 띄운 Gazebo 서버에 종료를 요청하고 본인 자식 프로세스만 깔끔하게 정리합니다. GUI를 열면 공항 전체가 내려다보이는 조감도 시점으로 시작하고, 마우스로 이동하거나 확대·회전할 수 있습니다.
+종료할 때는 `Ctrl+C`를 누릅니다. 실행 스크립트가 자신이 띄운 Gazebo 서버에 종료를 요청하고 자기 자식 프로세스만 깔끔하게 정리합니다. GUI를 열면 공항 전체가 내려다보이는 조감도 시점으로 시작하고, 마우스로 이동하거나 확대·회전할 수 있습니다.
 
 `sim.sh`는 기본으로 ROS domain 86과 전용 Gazebo partition을 씁니다. 다른 실행과 분리하고 싶으면 `OMSLAM_SIM_DOMAIN_ID`와 `OMSLAM_GZ_PARTITION`을 바꾸면 됩니다. ROS 로그 기본 저장 경로는 `reports/airport/live/ros_logs`입니다.
 

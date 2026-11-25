@@ -17,7 +17,7 @@ Arduino Mega 2560 하위 구동 제어기와 상위 ROS 2 자율주행 스택(`r
 
 **1차 구현은 `rclpy` 브리지로 가기로 했습니다.** 이미 검증해 둔 Python 프로토콜과 보정, 구동 코드를 그대로 쓸 수 있고, Nav2가 필요로 하는 표준 속도 명령과 odom, TF를 깔끔하게 붙일 수 있기 때문입니다. 메가의 1 kHz 제어 루프는 호스트의 ROS executor 주기와 별도로 돌아갑니다.
 
-`ros2_control + diff_drive_controller`도 차체 속도 변환과 피드백 odom, timeout을 다 제공하는 좋은 대안입니다. 다만 지금 도입하려면 하드웨어 플러그인과 시리얼 비동기 입출력, 상태 전환을 기존 Python 계층과 다시 나눠 짜야 해서 이번 기준 경로에는 넣지 않았습니다. 나중에 교체하더라도 아래에 정리한 ROS 외부 인터페이스는 그대로 유지합니다. [Jazzy diff_drive_controller](https://control.ros.org/jazzy/doc/ros2_controllers/diff_drive_controller/doc/userdoc.html)
+`ros2_control + diff_drive_controller`도 차체 속도 변환과 피드백 odom, timeout을 다 제공하는 좋은 대안입니다. 다만 지금 도입하려면 하드웨어 플러그인과 시리얼 비동기 입출력, 상태 전환을 기존 Python 계층과 다시 나눠 짜야 해서 이번 기준 경로에는 넣지 않았습니다. 나중에 교체하더라도 아래에 정리한 ROS 외부 인터페이스는 바꾸지 않습니다. [Jazzy diff_drive_controller](https://control.ros.org/jazzy/doc/ros2_controllers/diff_drive_controller/doc/userdoc.html)
 
 ## 2. 명령과 관측 흐름
 
@@ -46,7 +46,7 @@ flowchart TD
     D --> F
 ```
 
-수동 모드와 자율 모드는 명시적으로 전환합니다. 두 곳에서 동시에 들어온 명령을 임의로 섞지 않습니다. 초기 구현에서는 모드마다 고정된 입력 소스 하나만 열어 두어, 조종기와 Nav2가 서로 명령을 두고 경쟁할 일이 없게 했습니다.
+수동 모드와 자율 모드는 명시적으로 전환하고 두 곳에서 동시에 들어온 명령을 임의로 섞지 않습니다. 초기 구현에서는 모드마다 고정된 입력 소스 하나만 열어 두어, 조종기와 Nav2가 서로 명령을 두고 경쟁할 일이 없게 했습니다.
 
 속도 평활은 `Velocity Smoother`가 맡고, `navigation_guard`가 센서 관측과 원본 명령 신선도, 실행 상태를 확인해서 최종 명령을 차단하는 역할을 합니다. 그 뒤에 있는 base 브리지는 유효한 명령의 단위 변환, 상한 축소, 3.0 RPM 최소 구동 하한 데드밴드 컷, 차단만 처리하고, 감속 중이거나 0인 명령을 다시 가속하지 않습니다. 실제 센서가 없는 순수 모의 장치 시험은 별도 프로파일로 나눠 둡니다.
 
@@ -54,9 +54,9 @@ flowchart TD
 
 ### 메시지와 시각
 
-- 속도 명령 체인은 전부 `geometry_msgs/msg/TwistStamped`로 맞췄습니다. Jazzy에서 기본값이 `Twist`인 노드는 `enable_stamped_cmd_vel=true`를 직접 켜고, 설치된 바이너리에서 실제로 지원하는지 확인합니다.
+- 속도 명령 체인은 전부 `geometry_msgs/msg/TwistStamped`로 맞췄습니다. Jazzy에서 기본값이 `Twist`인 노드는 `enable_stamped_cmd_vel=true`를 직접 켜고 설치된 바이너리에서 지원 여부를 확인합니다.
 - 키보드 입력이 `Twist`만 내보내는 경우에는 입력 어댑터에서 처음 한 번만 stamp를 찍습니다. 수동 조종 입력이 끊겼는데 이전 명령을 계속 반복해서 보내는 동작은 막아 두었습니다.
-- 원본 timestamp는 smoother와 `navigation_guard`, base를 통과하는 내내 그대로 유지합니다. smoother가 timestamp를 새로 덮어쓰는 기능은 꺼 두고, 설치 버전에서 실제로 원본 stamp가 남는지 P1에서 확인합니다.
+- 원본 timestamp는 smoother와 `navigation_guard`, base를 통과하는 내내 그대로 유지합니다. smoother가 timestamp를 새로 덮어쓰는 기능은 꺼 두고 설치 버전에서 원본 stamp가 남는지는 P1에서 확인합니다.
 - base는 원본 입력의 경과 시간을 ROS 시각으로 먼저 확인한 뒤, 같은 프로세스 안의 monotonic deadline으로 관리합니다. 장치 I/O 마감 시각을 `/clock`이나 시스템 시각 점프에 맡기지 않기 위해서입니다.
 - NaN이나 Inf, 차동구동에서 쓸 수 없는 횡이동이나 roll/pitch 속도, 잘못된 frame이 들어오면 거부합니다. 기준 프레임은 `base_footprint`로 통일하고, `base_link` 입력을 받을 때는 두 프레임의 고정 관계를 확인합니다.
 - 시뮬레이션은 ROS 시각을 쓰되, 일시정지하거나 재시작하면 저장해 둔 명령을 바로 버립니다. 실물 백엔드는 `use_sim_time=true` 설정 자체를 거부합니다.
@@ -83,11 +83,11 @@ flowchart TD
 | 입력 소스 또는 Velocity Smoother 중단 | 원본과 최종 명령 신선도를 각각 확인한 뒤 차단 |
 | deactivate, 종료, 재접속, MCU 재부팅 | 과거 목표 폐기, 새 식별·피드백·활성화·새 명령 필요 |
 
-원본 명령 토픽도 같이 지켜보고 있기 때문에 smoother가 timeout 뒤에 새 stamp로 만든 0 메시지를 운전자의 새 정지 의도로 착각하지 않습니다. 정상 정지와 장애물 정지는 유효한 소스가 살아 있는 동안 HOLD를 유지할 수 있지만, 소스 자체가 끊기면 출력을 아예 풉니다. Nav2 목표가 끝난 뒤 0 출력이 멈춰도 최종적으로는 정지하고 출력이 풀린 상태로 남습니다.
+원본 명령 토픽도 함께 지켜보므로 smoother가 timeout 뒤 새 stamp로 내보낸 0 메시지를 운전자의 새 정지 의도로 착각하지 않습니다. 정상 정지와 장애물 정지는 유효한 소스가 살아 있는 동안 HOLD를 유지할 수 있지만, 소스 자체가 끊기면 출력을 아예 풉니다. Nav2 목표가 끝난 뒤 0 출력이 멈춰도 최종적으로는 정지하고 출력이 풀린 상태로 남습니다.
 
 특히 원본 명령이 200 ms 넘게 지난 시점에 같은 stamp의 장애물 정지 출력이 들어왔을 때, 최소 100 ms lease 조건 때문에 0 명령을 건너뛰면 안 됩니다. 이런 상황에서는 `STOP`이 무조건 우선하며 이전의 0이 아닌 속도를 deadline까지 끌고 가지 않습니다. 최소 lease 규칙은 일반 이동 명령을 재송신할 때만 적용합니다.
 
-300 ms는 어디까지나 **명령의 유효기간**입니다. 로봇이 실제로 완전히 멈추는 시간과 제동 거리는 주행 속도와 바닥 상태에 따라 따로 측정해야 합니다. 명령 만료 시각과 물리적 정지 시점을 같은 수치로 적지 않습니다.
+300 ms는 어디까지나 **명령의 유효기간**입니다. 로봇이 완전히 멈추는 시간과 제동 거리는 주행 속도와 바닥 상태에 따라 따로 측정해야 합니다. 명령 만료 시각과 물리적 정지 시점을 같은 수치로 적지 않습니다.
 
 ### 시리얼 소유권
 
@@ -118,7 +118,7 @@ delta_s  = (delta_sR + delta_sL) / 2
 delta_yaw = (delta_sR - delta_sL) / b
 ```
 
-적분에는 SE(2) 원호 적분을 쓰고, 회전량이 아주 작을 때는 직선 극한식으로 처리합니다. 목표 RPM이나 마지막 `/cmd_vel`을 적분해서 실측 odom인 것처럼 내보내지 않습니다. MCU tick wrap과 재부팅, 한꺼번에 들어온 수신 batch, 중복 샘플은 모두 구분해서 처리합니다. 새로운 엔코더 샘플이 들어왔을 때만 약 20 Hz로 wheel odom과 joint states를 발행하고, 적분 주기는 MCU 시간 증가량을 씁니다. ROS stamp로 바꿀 때의 초기 오프셋과 재동기화 기준도 따로 둡니다.
+적분에는 SE(2) 원호 적분을 쓰고, 회전량이 아주 작을 때는 직선 극한식으로 처리합니다. 목표 RPM이나 마지막 `/cmd_vel`을 적분해서 실측 odom인 것처럼 내보내지 않습니다. MCU tick wrap과 재부팅, 한꺼번에 들어온 수신 batch, 중복 샘플은 모두 구분해서 처리합니다. 새로운 엔코더 샘플이 들어왔을 때만 약 20 Hz로 wheel odom과 joint states를 발행하고, 적분 주기는 MCU 시간 증가량을 씁니다. ROS stamp로 바꿀 때의 초기 오프셋과 재동기화 기준도 정해 둡니다.
 
 `/joint_states`는 `left_wheel_joint`와 `right_wheel_joint`의 실제 누적 각도(rad)와 각속도(rad/s)를 발행합니다. 양쪽 URDF 관절 축은 +Y이며 물리적 전진 방향과 맞는지 확인합니다. `base_footprint`는 차체 외곽 정중앙이 아니라 구동축 중점을 지면에 내린 점입니다.
 
@@ -145,9 +145,9 @@ delta_yaw = (delta_sR - delta_sL) / b
 | `/map` | `nav_msgs/OccupancyGrid` | SLAM 또는 map_server | map 소비 QoS에 맞춘 transient local |
 | `/diagnostics` | `DiagnosticArray` | base·상태 감시 → 관측 | 1 Hz + 상태 변화 시 |
 
-시뮬레이션 영상이나 IMU 데이터가 `/clock`보다 먼저 도착하면 인지 노드는 시계가 따라올 때까지 잠시 들고 기다립니다. 미래 시각 관측을 미리 처리하거나 현재 시각으로 바꿔치기하지 않으며, 기다리는 동안에도 최초 수신 기준 0.30초 만료 시간은 연장하지 않습니다.
+시뮬레이션 영상이나 IMU 데이터가 `/clock`보다 먼저 도착하면 인지 노드는 시계가 따라올 때까지 잠시 보관하며 기다립니다. 미래 시각 관측을 미리 처리하거나 현재 시각으로 바꿔치기하지 않으며, 기다리는 동안에도 최초 수신 기준 0.30초 만료 시간은 연장하지 않습니다.
 
-토픽 이름만 맞췄다고 끝내지 않고, 양쪽 endpoint의 offered/requested QoS가 실제로 호환되는지 확인합니다. 동기화가 필요한 RGB-D와 IMU의 timestamp, TF 유효 시각도 함께 기록합니다.
+토픽 이름을 맞추는 데서 그치지 않고 양쪽 endpoint의 offered/requested QoS가 호환되는지까지 확인합니다. 동기화가 필요한 RGB-D와 IMU의 timestamp, TF 유효 시각도 함께 기록합니다.
 
 ### 주요 서비스와 액션
 
@@ -177,7 +177,7 @@ flowchart LR
     camera_link --> camera_optical_frame
 ```
 
-위 그림은 개념적인 트리이고, 실제 `lidar_link` 같은 중간 링크는 원본 URDF 구조를 그대로 유지합니다. `camera_optical_frame`은 Z 전방, X 우측, Y 하방 기준입니다. 실물 센서 장착 자세는 CAD 값만 믿지 않고 실제 장착 상태를 따로 확인합니다.
+위 그림은 개념적인 트리이고, 실제 `lidar_link` 같은 중간 링크는 원본 URDF 구조를 그대로 유지합니다. `camera_optical_frame`은 Z 전방, X 우측, Y 하방 기준입니다. 실물 센서 장착 자세는 CAD 값만 믿지 않고 실제 장착 상태를 직접 확인합니다.
 
 | 모드 | `odom → base_footprint` | `map → odom` |
 | --- | --- | --- |
@@ -190,7 +190,7 @@ EKF를 켤 때는 raw wheel odom이나 Gazebo, 기존 ICP odometry가 `odom` TF�
 
 EKF는 `two_d_mode=true`, `world_frame=odom`, `base_link_frame=base_footprint`로 시작합니다. 기본 입력은 바퀴의 `vx`, `wz`와 IMU 하나의 차체 기준 yaw rate입니다. 같은 엔코더에서 나온 pose와 twist를 독립 측정처럼 중복해서 넣지 않습니다. `vy=0` 제약과 covariance는 차체 미끄러짐을 보면서 잡습니다. 자기장 yaw나 선형 가속도, IMU 두 개 동시 결합은 기본 설정에서 뺐습니다. IMU 입력 마스크는 세 축 각속도를 모두 선택해서 장착 TF로 차체 기준에 맞게 회전시킨 뒤 2D 제약을 적용합니다. 센서 Z축만 떼어다가 차체 yaw라고 가정하지 않습니다.
 
-라이다 `LaserScan`은 EKF에 직접 넣지 않습니다. 기본 구성에서 라이다는 `slam_toolbox`나 AMCL이 `/odom`과 함께 써서 `map → odom`을 보정하는 데 씁니다. 별도 scan matching으로 라이다 오도메트리를 만들어 결합할 수도 있지만 기본 입력에는 넣지 않았습니다. EKF odom을 사전값으로 쓴 SLAM 결과를 다시 같은 EKF의 독립 측정처럼 되먹이는 구조도 피합니다.
+라이다 `LaserScan`은 EKF에 직접 넣지 않습니다. 기본 구성에서 라이다는 `slam_toolbox`나 AMCL이 `/odom`과 함께 써서 `map → odom`을 보정하는 데 씁니다. 별도 scan matching으로 라이다 오도메트리를 만들어 결합할 수도 있지만 기본 입력에는 넣지 않았습니다. SLAM이 EKF odom을 사전값으로 썼다면 그 결과를 같은 EKF에 독립 측정값으로 다시 넣지 않습니다.
 
 외장 IMU인 HFI-A9을 1차 yaw-rate 후보로 두되, 축 방향과 바이어스, timestamp를 먼저 검증합니다. D435i 내장 IMU는 깊이 바닥 추정과 센서 상태 확인에 쓸 수 있습니다. 카메라 기반 pose나 VO/VIO는 도입하지 않습니다.
 
@@ -206,19 +206,19 @@ EKF는 `two_d_mode=true`, `world_frame=odom`, `base_link_frame=base_footprint`�
 | 기하 | CAD 초기값 | 지면 보정값과 장착 실측값 |
 | 검증용 truth | 별도 sim truth만 사용 | 줄자, 각도 기준, 관찰·측정 로그 |
 
-Gazebo truth는 어디까지나 검증용이며 SLAM이나 EKF, Nav2 입력으로 쓰지 않습니다. 시뮬레이션을 통과했다고 해서 USB 통신, 메가 PID, 실제 바닥 마찰, MCU 차단 시간까지 검증된 것은 아닙니다. 프로토콜 mock 시험과 Gazebo 주행 시험 결과도 구분해서 기록합니다.
+Gazebo truth는 검증에만 쓰고 SLAM이나 EKF, Nav2 입력으로 넣지 않습니다. 시뮬레이션을 통과했다고 해서 USB 통신, 메가 PID, 실제 바닥 마찰, MCU 차단 시간까지 검증된 것은 아닙니다. 프로토콜 mock 시험과 Gazebo 주행 시험 결과도 구분해서 기록합니다.
 
 ## 8. Nav2와 인지의 기본 선택
 
-- **전역 계획은 `State Lattice`, 지역 제어는 `DWB`로 맞췄습니다:** 시뮬레이션과 실물 모두 `nav2_smac_planner::SmacPlannerLattice`와 `dwb_core::DWBLocalPlanner`를 씁니다. State Lattice는 로봇 방향과 기본 움직임 집합을 고려해 전역 경로를 찾고, DWB는 현재 속도와 주변 장애물을 보고 지역 궤적을 골라 명령을 냅니다. 전역과 지역 비용지도 양쪽에 같은 사각형 footprint와 padding을 적용합니다.
-- **목표 도착과 방향 정렬 기준을 한곳에서 관리합니다:** 도착 판정의 XY 허용오차(기본 5 cm)는 `controller_server.goal_checker.xy_goal_tolerance` 한곳에만 두고, launch가 같은 값을 DWB(`FollowPath.xy_goal_tolerance`)로 넘겨줍니다. 전역 계획기는 공식 Jazzy `nav2_smac_planner::SmacPlannerLattice`를 쓰며, `GridBased.tolerance`(4 cm)는 A* 탐색 fallback 허용값이라 의미가 다릅니다. 최종 도착은 목표 위치와 방향, 실제 측정 정지를 매 주기 함께 확인하는 `StoppedGoalChecker`(`stateful=false`)가 판정합니다.
+- **전역 계획은 `State Lattice`, 지역 제어는 `DWB`로 맞췄습니다.** Gazebo 시뮬레이션에서 검증한 `nav2_smac_planner::SmacPlannerLattice`와 `dwb_core::DWBLocalPlanner` 조합을 실물 단계의 공통 기준으로 삼습니다. State Lattice는 로봇 방향과 기본 움직임 집합을 고려해 전역 경로를 찾고, DWB는 현재 속도와 주변 장애물을 보고 지역 궤적을 골라 명령을 냅니다. 전역과 지역 비용지도 양쪽에 같은 사각형 footprint와 padding을 적용합니다.
+- **목표 도착과 방향 정렬 기준을 한곳에서 관리합니다.** 도착 판정의 XY 허용오차(기본 5 cm)는 `controller_server.goal_checker.xy_goal_tolerance` 한곳에만 두고 launch가 같은 값을 DWB(`FollowPath.xy_goal_tolerance`)로 넘겨줍니다. 전역 계획기는 공식 Jazzy `nav2_smac_planner::SmacPlannerLattice`를 쓰며, `GridBased.tolerance`(4 cm)는 A* 탐색 fallback 허용값이라 의미가 다릅니다. 최종 도착은 목표 위치와 방향, 실제 측정 정지를 매 주기 함께 확인하는 `StoppedGoalChecker`(`stateful=false`)가 판정합니다.
 - **DWB 구동과 충돌 규칙:** 차동구동이므로 측면 속도 `vy`는 0으로 고정합니다. 속도와 가감속 한도는 검증된 바퀴 운용 범위(실물 3–95 RPM, 시뮬레이션 3–70 RPM)에 맞춥니다. 사각형 footprint와 padding을 검사하는 `ObstacleFootprint` critic을 필수로 넣어, 충돌하는 궤적은 경로 비용이 아무리 낮아도 버립니다. 경로 정렬, 목표 도착, 진동 억제 가중치와 속도 샘플은 P4의 코너·낮은 장애물·막힌 통로 시나리오에서 다듬었습니다. [DWB 설정](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/), [ObstacleFootprintCritic](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/controller_plugins/dwb_controller/trajectory_critics/obstacle_footprint/)
-- **비용지도는 표준 레이어로 먼저 구성합니다:** static, obstacle, inflation 레이어로 기본 주행을 안정화하는 것이 우선입니다. 보로노이 전용 레이어와 중앙선 선호 검증은 초기 범위에서 뺐습니다. 나중에 실제 주행 결과를 보고 꼭 필요하다고 판단되면 별도로 검토합니다.
+- **비용지도는 표준 레이어로 먼저 구성합니다.** static, obstacle, inflation 레이어로 기본 주행을 안정화하는 것이 우선입니다. 보로노이 전용 레이어와 중앙선 선호 검증은 초기 범위에서 뺐습니다. 나중에 실제 주행 결과를 보고 꼭 필요하다고 판단되면 별도로 검토합니다.
 - **State Lattice 움직임 집합:** 미리 계산해 둔 기본 움직임 집합을 JSON으로 설치하고 `lattice_filepath`로 지정합니다. 차동구동 `diff` 모델과 전역 costmap 격자 해상도를 맞춰야 하며, 초기 설정은 아래 표를 따릅니다. 움직임 집합과 설정의 출처, 해시를 고정해 두고 PC와 Orin에서 같은 파일을 씁니다. [Jazzy 움직임 집합 생성기](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_smac_planner/lattice_primitives/README.md)
-- **라이다 아래 낮은 장애물은 RGB-D로 기억합니다:** 라이다 스캔 높이보다 낮은 장애물은 2D 스캔에 걸리지 않습니다. 깊이 카메라로 바닥을 분리해 낮은 장애물을 찾아내고, 시야에서 벗어나도 `omm_perception`과 `camera_memory` 레이어에 남겨 지역·전역 비용지도에 반영합니다. 라이다 정적 SLAM 지도와 임시 장애물 메모리는 따로 관리합니다.
-- **루프 클로저가 일어나면 장애물 메모리를 정리합니다:** 장애물 메모리가 `odom` 프레임 기준일 때 루프 클로저로 `map → odom`이 크게 보정되면 재투영하거나 무효화하는 규칙을 적용합니다. 관측하지 못한 영역이나 깊이 무효값을 빈 공간으로 오인하지 않도록 처리합니다.
-- **회복 동작은 보수적으로 둡니다:** 실물 로봇의 초기 회복 동작은 정지, 대기, 재계획 순서로 잡습니다. 자율 후진이나 제자리 회전 회복은 차체 외곽과 후방 센서 관측 범위가 검증된 조건에서만 엽니다.
-- **연산 자원은 역할에 맞게 나눕니다:** Jetson Orin에서는 구동 제어, 위치추정, Nav2만 돌리고 무거운 Gazebo 시뮬레이터와 RViz는 개발 PC에서 띄웁니다. CPU 부하 때문에 제어 주기가 밀릴 때는 안전 워치독을 느슨하게 풀지 않고, 카메라 해상도나 프레임레이트, 시각화 전송량부터 줄입니다.
+- **라이다 아래 낮은 장애물은 RGB-D로 기억합니다.** 라이다 스캔 높이보다 낮은 장애물은 2D 스캔에 걸리지 않습니다. 깊이 카메라로 바닥을 분리해 낮은 장애물을 찾아내고, 시야에서 벗어나도 `omm_perception`과 `camera_memory` 레이어에 남겨 지역·전역 비용지도에 반영합니다. 라이다 정적 SLAM 지도와 임시 장애물 메모리는 따로 관리합니다.
+- **루프 클로저가 일어나면 장애물 메모리를 정리합니다.** 장애물 메모리가 `odom` 프레임 기준일 때 루프 클로저로 `map → odom`이 크게 보정되면 재투영하거나 무효화하는 규칙을 적용합니다. 관측하지 못한 영역이나 깊이 무효값을 빈 공간으로 오인하지 않도록 처리합니다.
+- **회복 동작은 보수적으로 둡니다.** 실물 로봇의 초기 회복 동작은 정지, 대기, 재계획 순서로 잡습니다. 자율 후진이나 제자리 회전 회복은 차체 외곽과 후방 센서 관측 범위가 검증된 조건에서만 엽니다.
+- **연산 자원은 역할에 맞게 나눕니다.** Jetson Orin에서는 구동 제어, 위치추정, Nav2만 돌리고 무거운 Gazebo 시뮬레이터와 RViz는 개발 PC에서 띄웁니다. CPU 부하 때문에 제어 주기가 밀릴 때는 안전 워치독을 느슨하게 풀지 않고, 카메라 해상도나 프레임레이트, 시각화 전송량부터 줄입니다.
 
 ### State Lattice 초기 프로파일
 
